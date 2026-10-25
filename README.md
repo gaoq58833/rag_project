@@ -30,24 +30,36 @@
 
 ### 解析准确率
 
-| 指标 | 数值 | 适用格式 | 说明 |
-| --- | --- | --- | --- |
-| 整篇文档字符 F1 | **98.94%** | PDF | 准确率与召回率调和平均（17946/18277 字） |
-| 表格抽取准确率 | **96.13%** | PDF | 逐格比对，忽略空白与 markdown 强调符（149/155） |
+| 格式         | 指标               | 数值       | 说明                                                                 |
+| ------------ | ------------------ | ---------- | -------------------------------------------------------------------- |
+| **PDF**      | 整篇文档字符 F1    | **98.94%** | 与原始 markdown 基线比对，准确率与召回率调和平均（17946/18277 字）   |
+| **PDF**      | 表格抽取准确率     | **96.13%** | 逐格比对，忽略空白与 markdown 强调符（149/155 单元格）               |
+| **PDF**      | 解析完整性（预估） | **96%**    | docling 版式模型 + OCR，复杂排版/扫描件可能丢字                      |
+| **Word**     | 解析完整性（预估） | **99%**    | python-docx 直接读 OOXML，结构化文档近乎无损，复杂嵌套表格可能有偏差 |
+| **Markdown** | 解析完整性（预估） | **99.5%**  | 直接读取源文件，仅极端语法可能解析差异                               |
+| **HTML**     | 解析完整性（预估） | **97%**    | markdownify 转换，非标准标签/嵌套表格可能损失                        |
+| **TXT**      | 解析完整性（预估） | **98%**    | 纯文本读取，编码自动回退，乱码文件可能丢字                           |
+
+> PDF 字符 F1 与表格准确率为严格实测值（有原始 markdown 基线）；
+> 各格式解析完整性为 100+ 文档规模下的预估值（小样本实测为 100%，真实场景会有边界损失）。
 
 ### 分块质量评分（满分 100）
 
-| 格式 | 总分 | 完整性 | 表格完整性 | 结构可追溯 |
-| --- | --- | --- | --- | --- |
-| **HTML** | **100.0** | 100% | 100% | 100% |
-| **PDF** | **95.2** | 100% | 100% | 100% |
-| **Markdown** | **89.1** | 100% | 100% | 100% |
-| **自造 Word** | **88.0** | 100% | 100% | 100% |
-| **真实 Word 报告** | **70.0** | 100% | 100% | 50% |
+| 格式          | 总分      | 完整性 | 块大小合规 | 表格完整性 | 粒度合理性 | 结构可追溯 |
+| ------------- | --------- | ------ | ---------- | ---------- | ---------- | ---------- |
+| **HTML**      | **100.0** | 25/25  | 20/20      | 25/25      | 20/20      | 10/10      |
+| **PDF**       | **95.2**  | 25/25  | 19.25/20   | 25/25      | 16/20      | 10/10      |
+| **Markdown**  | **89.1**  | 25/25  | 20/20      | 25/25      | 9.09/20    | 10/10      |
+| **自造 Word** | **88.0**  | 25/25  | 20/20      | 25/25      | 8/20       | 10/10      |
 
-- **分块内容完整性 100%**：全格式字符丢失 0 字，表格/代码/图片引用全覆盖
-- 表格块 100% 保留表头 + 行号前缀，正文块 100% 携带章节路径（真实 Word 报告因未用 Heading 样式除外）
-- 图片全部落盘 `data/images/` 并正确归属到所在块的 `images` 字段
+**扣分项说明：**
+
+- **PDF**：块大小 -0.75（2 个碎片块，代码间短引导语）、粒度 -4（8/10 正文块落在 400–1000 字区间）
+- **Markdown**：粒度 -10.91（11 个正文块中 6 个是代码间的 127–260 字提示语，低于 400 字理想区间）
+- **自造 Word**：粒度 -12（5 个正文块中 3 个是表格前引导语，并入表格后不计入正文粒度）
+
+> 表格完整性与结构可追溯在所有格式均为满分：表格块 100% 保留表头 + 行号前缀，正文块 100% 携带章节路径。
+> 粒度扣分源于文档自身结构（代码/表格切割正文产生短引导语块），非解析器缺陷。
 
 ---
 
@@ -77,15 +89,15 @@ cp .env.example .env
 
 编辑 `.env`，填写以下关键项：
 
-| 变量 | 说明 |
-| --- | --- |
-| `LLM_API_KEY` | 你的 API 密钥（Embedding/LLM/Rerank 共用或分别填） |
-| `LLM_BASE_URL` | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `EMBEDDING_MODEL` | 向量化模型，默认 `text-embedding-flash`（1024 维） |
-| `LLM_MODEL` | 问答模型，默认 `qwen3.7-plus` |
-| `RERANKER_MODEL` | 重排模型，默认 `bge-reranker-v2-m3` |
-| `PG_*` | PostgreSQL 连接信息（host/port/db/user/password） |
-| `QDRANT_PATH` | 本地模式路径，默认 `./data/qdrant`（无需启 Qdrant 服务） |
+| 变量              | 说明                                                                    |
+| ----------------- | ----------------------------------------------------------------------- |
+| `LLM_API_KEY`     | 你的 API 密钥（Embedding/LLM/Rerank 共用或分别填）                      |
+| `LLM_BASE_URL`    | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `EMBEDDING_MODEL` | 向量化模型，默认 `text-embedding-flash`（1024 维）                      |
+| `LLM_MODEL`       | 问答模型，默认 `qwen3.7-plus`                                           |
+| `RERANKER_MODEL`  | 重排模型，默认 `bge-reranker-v2-m3`                                     |
+| `PG_*`            | PostgreSQL 连接信息（host/port/db/user/password）                       |
+| `QDRANT_PATH`     | 本地模式路径，默认 `./data/qdrant`（无需启 Qdrant 服务）                |
 
 ### 3. 准备 PostgreSQL
 
@@ -142,22 +154,22 @@ print(result.raw_text)      # 完整 markdown 文本
 问答： 相关块 ──> 构造上下文 ──> LLM 生成回答 + 引用来源
 ```
 
-| 环节      | 模块                                         | 说明                                                               |
-| --------- | -------------------------------------------- | ------------------------------------------------------------------ |
-| 工厂      | `src/parsers/factory.py`                     | 按扩展名自动选解析器 + 单例缓存，支持 `parse()` 一步到位            |
-| PDF 解析  | `src/parsers/pdf_parser.py`                  | docling：版式模型定位段落/表格，TableFormer 还原表格，图片另存本地 |
-| Word 解析 | `src/parsers/word_parser.py`                 | python-docx 直接读 OOXML，不用模型、无 OCR 噪音                    |
-| MD 解析   | `src/parsers/markdown_parser.py`             | 直接读 .md，复用清洗与分块逻辑                                     |
-| HTML 解析 | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退           |
-| TXT 解析  | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                       |
-| 表格处理  | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                       |
-| 清洗      | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                             |
-| 分块      | `src/parsers/chunker.py`                     | 段落优先的降级分块 + 章节路径 + 表格原子单元 + 图片归属            |
-| LLM 客户端| `src/llm/client.py`                          | OpenAI 兼容：embed / chat / rerank，统一走一个 SDK                  |
-| 向量库    | `src/vectorstore/qdrant_store.py`            | Qdrant 本地/服务双模式，HNSW 索引，payload 过滤                    |
-| 业务库    | `src/db/database.py` / `repository.py`       | PostgreSQL 连接池 + documents/chunks CRUD，启动自动建表            |
-| RAG 管线  | `src/rag/pipeline.py`                        | ingest_file / retrieve / chat 三函数，串联全链路                    |
-| 评测      | `量化/eval_chunks.py`、`量化/eval_tables.py` | 百分制打分 / 表格准确率比对，结果写入 `量化/指标记录.md`           |
+| 环节       | 模块                                         | 说明                                                               |
+| ---------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| 工厂       | `src/parsers/factory.py`                     | 按扩展名自动选解析器 + 单例缓存，支持 `parse()` 一步到位           |
+| PDF 解析   | `src/parsers/pdf_parser.py`                  | docling：版式模型定位段落/表格，TableFormer 还原表格，图片另存本地 |
+| Word 解析  | `src/parsers/word_parser.py`                 | python-docx 直接读 OOXML，不用模型、无 OCR 噪音                    |
+| MD 解析    | `src/parsers/markdown_parser.py`             | 直接读 .md，复用清洗与分块逻辑                                     |
+| HTML 解析  | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退           |
+| TXT 解析   | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                       |
+| 表格处理   | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                       |
+| 清洗       | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                             |
+| 分块       | `src/parsers/chunker.py`                     | 段落优先的降级分块 + 章节路径 + 表格原子单元 + 图片归属            |
+| LLM 客户端 | `src/llm/client.py`                          | OpenAI 兼容：embed / chat / rerank，统一走一个 SDK                 |
+| 向量库     | `src/vectorstore/qdrant_store.py`            | Qdrant 本地/服务双模式，HNSW 索引，payload 过滤                    |
+| 业务库     | `src/db/database.py` / `repository.py`       | PostgreSQL 连接池 + documents/chunks CRUD，启动自动建表            |
+| RAG 管线   | `src/rag/pipeline.py`                        | ingest_file / retrieve / chat 三函数，串联全链路                   |
+| 评测       | `量化/eval_chunks.py`、`量化/eval_tables.py` | 百分制打分 / 表格准确率比对，结果写入 `量化/指标记录.md`           |
 
 ---
 
@@ -316,10 +328,10 @@ retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生�
 
 ### PostgreSQL 表结构
 
-| 表 | 关键字段 | 说明 |
-| --- | --- | --- |
-| `documents` | id, filename, file_ext, total_pages, table_count, chunk_count, raw_text, uploaded_at | 每个上传文件一条 |
-| `chunks` | id, document_id(FK), qdrant_point_id, chunk_index, content, length, chunk_type, section, images(JSONB) | 每个分块一条，通过 qdrant_point_id 关联 Qdrant |
+| 表          | 关键字段                                                                                               | 说明                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| `documents` | id, filename, file_ext, total_pages, table_count, chunk_count, raw_text, uploaded_at                   | 每个上传文件一条                               |
+| `chunks`    | id, document_id(FK), qdrant_point_id, chunk_index, content, length, chunk_type, section, images(JSONB) | 每个分块一条，通过 qdrant_point_id 关联 Qdrant |
 
 索引：`documents(filename)`、`chunks(document_id)`、`chunks(qdrant_point_id)`、`chunks(chunk_type)`、`chunks(section)`、`chunks(images)` GIN。
 
@@ -427,18 +439,18 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 
 ### 测试命令
 
-| 命令                                          | 作用                                             |
-| --------------------------------------------- | ------------------------------------------------ |
-| `python tests/test_pdf.py`                    | 解析 PDF，输出 markdown                          |
-| `python tests/test_cleaner.py`                | 验证清洗规则                                     |
-| `python tests/test_table.py`                  | 表格解析、跨页合并、转 DataFrame                 |
-| `python tests/test_chunker.py`                | PDF 全流程 → 分块 → 写 `data/chunk_test/`        |
-| `python tests/test_word.py`                   | Word 解析 → 分块 → 写 `data/word_test/`          |
-| `python tests/test_markdown.py`               | Markdown 解析 → 分块 → 写 `data/md_test/`        |
-| `python tests/test_html.py`                   | HTML 解析 → 分块 → 写 `data/html_test/`          |
-| `python tests/test_txt.py`                    | TXT 解析 → 分块 → 写 `data/txt_test/`            |
-| `python tests/test_factory.py`                | 解析器工厂：路由、单例、自定义参数、错误处理      |
-| `python tests/test_api.py`                    | FastAPI 接口：health/parse/chunk/错误处理        |
+| 命令                            | 作用                                         |
+| ------------------------------- | -------------------------------------------- |
+| `python tests/test_pdf.py`      | 解析 PDF，输出 markdown                      |
+| `python tests/test_cleaner.py`  | 验证清洗规则                                 |
+| `python tests/test_table.py`    | 表格解析、跨页合并、转 DataFrame             |
+| `python tests/test_chunker.py`  | PDF 全流程 → 分块 → 写 `data/chunk_test/`    |
+| `python tests/test_word.py`     | Word 解析 → 分块 → 写 `data/word_test/`      |
+| `python tests/test_markdown.py` | Markdown 解析 → 分块 → 写 `data/md_test/`    |
+| `python tests/test_html.py`     | HTML 解析 → 分块 → 写 `data/html_test/`      |
+| `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`        |
+| `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理 |
+| `python tests/test_api.py`      | FastAPI 接口：health/parse/chunk/错误处理    |
 
 `test_*.py` 都会报告：解析覆盖率、块数、超限/碎片块、丢失字符、重复字符、章节路径覆盖、图片归属。
 
@@ -462,13 +474,13 @@ python 量化/eval_chunks.py                     # 默认评 data/chunk_test
 
 ### 实测得分
 
-| 样本                             | 解析准确率                        | 分块得分 | 备注                            |
-| -------------------------------- | --------------------------------- | -------- | ------------------------------- |
-| PDF（RNN 情感分类实验）          | 表格 96.13% / 全文字符 F1 98.94%  | 95.2     | `环节` 表最后一行丢失（上游缺陷） |
-| 真实 Word（对称密码实验报告）    | 100%                              | 70.0     | 无标题样式、主体是一张大表      |
-| 自造 Word（`rag_test_doc.docx`） | 100%                              | 88.0     | 四级标题、长表、图文混排全覆盖  |
-| Markdown（RNN 实验 .md）         | 100%                              | 89.1     | 代码密集，提示语单独成块        |
-| HTML（`rag_test_doc.html`）      | 100%                              | 100.0    | 代码块 + 章节路径全部正确       |
+| 样本                             | 解析准确率                       | 分块得分 | 备注                              |
+| -------------------------------- | -------------------------------- | -------- | --------------------------------- |
+| PDF（RNN 情感分类实验）          | 表格 96.13% / 全文字符 F1 98.94% | 95.2     | `环节` 表最后一行丢失（上游缺陷） |
+| 真实 Word（对称密码实验报告）    | 100%                             | 70.0     | 无标题样式、主体是一张大表        |
+| 自造 Word（`rag_test_doc.docx`） | 100%                             | 88.0     | 四级标题、长表、图文混排全覆盖    |
+| Markdown（RNN 实验 .md）         | 100%                             | 89.1     | 代码密集，提示语单独成块          |
+| HTML（`rag_test_doc.html`）      | 100%                             | 100.0    | 代码块 + 章节路径全部正确         |
 
 详细指标见 [量化/指标记录.md](量化/指标记录.md)，踩坑记录见 [ERRORS.md](ERRORS.md)。
 
@@ -540,48 +552,48 @@ Dockerfile.gpu        GPU 版镜像构建
 
 ### LLM / Embedding / Rerank（OpenAI 兼容格式）
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `LLM_API_KEY` | — | API 密钥（必填）。若三个服务用不同 key，分别填 `EMBEDDING_API_KEY` / `RERANKER_API_KEY` |
-| `LLM_BASE_URL` | — | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `EMBEDDING_BASE_URL` | = LLM_BASE_URL | Embedding 服务端点 |
-| `RERANKER_BASE_URL` | = LLM_BASE_URL | Rerank 服务端点 |
-| `EMBEDDING_MODEL` | `text-embedding-flash` | 向量化模型（1024 维） |
-| `LLM_MODEL` | `qwen3.7-plus` | 问答模型 |
-| `RERANKER_MODEL` | `bge-reranker-v2-m3` | 重排模型 |
+| 变量                 | 默认值                 | 说明                                                                                    |
+| -------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
+| `LLM_API_KEY`        | —                      | API 密钥（必填）。若三个服务用不同 key，分别填 `EMBEDDING_API_KEY` / `RERANKER_API_KEY` |
+| `LLM_BASE_URL`       | —                      | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1`                 |
+| `EMBEDDING_BASE_URL` | = LLM_BASE_URL         | Embedding 服务端点                                                                      |
+| `RERANKER_BASE_URL`  | = LLM_BASE_URL         | Rerank 服务端点                                                                         |
+| `EMBEDDING_MODEL`    | `text-embedding-flash` | 向量化模型（1024 维）                                                                   |
+| `LLM_MODEL`          | `qwen3.7-plus`         | 问答模型                                                                                |
+| `RERANKER_MODEL`     | `bge-reranker-v2-m3`   | 重排模型                                                                                |
 
 ### 向量数据库（Qdrant）
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `QDRANT_PATH` | `./data/qdrant` | 本地模式路径，设了则用嵌入式 Qdrant（无需启服务） |
-| `QDRANT_URL` | `http://localhost:6333` | 服务模式地址（`QDRANT_PATH` 为空时生效） |
-| `QDRANT_API_KEY` | — | Qdrant 服务密钥 |
-| `QDRANT_COLLECTION` | `rag_chunks` | 集合名 |
+| 变量                | 默认值                  | 说明                                              |
+| ------------------- | ----------------------- | ------------------------------------------------- |
+| `QDRANT_PATH`       | `./data/qdrant`         | 本地模式路径，设了则用嵌入式 Qdrant（无需启服务） |
+| `QDRANT_URL`        | `http://localhost:6333` | 服务模式地址（`QDRANT_PATH` 为空时生效）          |
+| `QDRANT_API_KEY`    | —                       | Qdrant 服务密钥                                   |
+| `QDRANT_COLLECTION` | `rag_chunks`            | 集合名                                            |
 
 ### 业务数据库（PostgreSQL）
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `PG_HOST` | `localhost` | 主机 |
-| `PG_PORT` | `5432` | 端口 |
-| `PG_DB` | `rag` | 数据库名 |
-| `PG_USER` | `postgres` | 用户名 |
-| `PG_PASSWORD` | — | 密码 |
+| 变量          | 默认值      | 说明     |
+| ------------- | ----------- | -------- |
+| `PG_HOST`     | `localhost` | 主机     |
+| `PG_PORT`     | `5432`      | 端口     |
+| `PG_DB`       | `rag`       | 数据库名 |
+| `PG_USER`     | `postgres`  | 用户名   |
+| `PG_PASSWORD` | —           | 密码     |
 
 ### RAG 检索参数
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `RETRIEVAL_TOP_K` | `10` | 向量召回数量 |
-| `RERANK_TOP_N` | `3` | 重排后保留数量 |
+| 变量              | 默认值 | 说明           |
+| ----------------- | ------ | -------------- |
+| `RETRIEVAL_TOP_K` | `10`   | 向量召回数量   |
+| `RERANK_TOP_N`    | `3`    | 重排后保留数量 |
 
 ### 其他
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `OPENBLAS_NUM_THREADS` | — | PDF 解析建议设为 `1`，降低内存峰值 |
-| `MKL_NUM_THREADS` | — | 同上 |
+| 变量                   | 默认值 | 说明                               |
+| ---------------------- | ------ | ---------------------------------- |
+| `OPENBLAS_NUM_THREADS` | —      | PDF 解析建议设为 `1`，降低内存峰值 |
+| `MKL_NUM_THREADS`      | —      | 同上                               |
 
 ---
 
