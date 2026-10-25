@@ -16,6 +16,7 @@
 
 | 环节      | 模块                                         | 说明                                                               |
 | --------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| 工厂      | `src/parsers/factory.py`                     | 按扩展名自动选解析器 + 单例缓存，支持 `parse()` 一步到位            |
 | PDF 解析  | `src/parsers/pdf_parser.py`                  | docling：版式模型定位段落/表格，TableFormer 还原表格，图片另存本地 |
 | Word 解析 | `src/parsers/word_parser.py`                 | python-docx 直接读 OOXML，不用模型、无 OCR 噪音                    |
 | MD 解析   | `src/parsers/markdown_parser.py`             | 直接读 .md，复用清洗与分块逻辑                                     |
@@ -59,6 +60,30 @@ export OPENBLAS_NUM_THREADS=1     # Linux
 ---
 
 ## 3. 核心模块
+
+### ParserFactory（推荐入口）
+
+无需手动判断格式，工厂根据扩展名自动选择解析器，并复用单例实例（PDFParser 的 docling 模型只加载一次）。
+
+```python
+from src.parsers.factory import get_parser, parse
+
+# 方式一：拿到解析器再调用
+parser = get_parser("上传文件.pdf")
+result = parser.parse("上传文件.pdf")
+
+# 方式二：一步到位
+result = parse("上传文件.docx")          # 自动用 WordParser
+result = parse("笔记.txt")              # 自动用 TXTParser
+
+# 从字节流解析（Web 上传场景）
+result = parse_from_bytes(file_bytes, "report.html")
+```
+
+- 默认参数走**单例缓存**：`get_parser("a.pdf") is get_parser("b.pdf")`
+- 传自定义参数时每次新建：`get_parser("a.pdf", do_ocr=False)` 不缓存
+- 不支持的格式抛 `ValueError`，用 `supported_extensions()` 查看支持列表
+- 支持动态注册：`register_parser(".foo", SomeParser)`
 
 ### 3.1 PDFParser
 
@@ -184,6 +209,7 @@ chunks = chunker.split(markdown_text)
 | `python tests/test_markdown.py`               | Markdown 解析 → 分块 → 写 `data/md_test/`        |
 | `python tests/test_html.py`                   | HTML 解析 → 分块 → 写 `data/html_test/`          |
 | `python tests/test_txt.py`                    | TXT 解析 → 分块 → 写 `data/txt_test/`            |
+| `python tests/test_factory.py`                | 解析器工厂：路由、单例、自定义参数、错误处理      |
 | `python tests/make_test_docx.py`              | 生成结构化测试文档 `test_file/rag_test_doc.docx` |
 
 `test_*.py` 都会同时报告：解析覆盖率、块数、超限/碎片块、丢失字符、重复字符、章节路径覆盖、图片归属。
@@ -227,6 +253,7 @@ python 量化/eval_chunks.py                     # 默认评 data/chunk_test，�
 ```
 src/parsers/          解析器与分块器
   base.py             BaseParser / ParseResult 抽象
+  factory.py          解析器工厂（自动选格式 + 单例缓存）
   pdf_parser.py       docling PDF 解析
   word_parser.py      python-docx Word 解析
   markdown_parser.py  Markdown 解析
