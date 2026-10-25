@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.schemas import (
@@ -56,6 +57,15 @@ app = FastAPI(
     description="支持 PDF / Word / Markdown / HTML / TXT 的解析与分块",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS 跨域配置（允许前端开发服务器访问）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # 生产环境请改为具体域名，如 ["http://localhost:5173"]
+    allow_credentials=True,
+    allow_methods=["*"],          # 允许所有 HTTP 方法
+    allow_headers=["*"],          # 允许所有请求头（含 Authorization）
 )
 
 # 分块器参数（可按需调整）
