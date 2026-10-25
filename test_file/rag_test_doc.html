@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>深度学习花卉图像识别实验指导书</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft YaHei", sans-serif;
+        }
+
+        body {
+            background-color: #f7f9fc;
+            color: #333;
+            line-height: 1.7;
+            padding: 20px 40px;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 40px 50px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+            border-radius: 10px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 30px;
+            font-size: 28px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 12px;
+        }
+
+        h2 {
+            color: #2980b9;
+            margin: 28px 0 14px;
+            font-size: 22px;
+        }
+
+        h3 {
+            color: #34495e;
+            margin: 20px 0 10px;
+            font-size: 18px;
+        }
+
+        p {
+            margin-bottom: 12px;
+            text-indent: 2em;
+        }
+
+        ul,
+        ol {
+            margin: 12px 0 12px 3em;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        .code-block {
+            background: #272822;
+            color: #f8f8f2;
+            padding: 16px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: Consolas, monospace;
+            font-size: 13px;
+            margin: 14px 0;
+            white-space: pre-wrap;
+        }
+
+        .note {
+            background-color: #e8f4fd;
+            border-left: 5px solid #3498db;
+            padding: 12px 16px;
+            margin: 16px 0;
+        }
+
+        .warning {
+            background-color: #fff3cd;
+            border-left: 5px solid #f39c12;
+            padding: 12px 16px;
+            margin: 16px 0;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 16px 0;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: center;
+        }
+
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+
+        .footer {
+            margin-top: 40px;
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+
+        .toc {
+            background: #f0f6fb;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+        }
+
+        .toc h3 {
+            margin-top: 0;
+        }
+
+        .toc a {
+            color: #2980b9;
+            text-decoration: none;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>深度学习花卉图像识别实验指导书</h1>
+        <div class="toc">
+            <h3>目录</h3>
+            <ol>
+                <li><a href="#sec1">实验目的</a></li>
+                <li><a href="#sec2">实验预习要求</a></li>
+                <li><a href="#sec3">实验环境与软硬件配置</a></li>
+                <li><a href="#sec4">实验数据集介绍</a></li>
+                <li><a href="#sec5">实验原理</a></li>
+                <li><a href="#sec6">实验内容与详细步骤</a></li>
+                <li><a href="#sec7">参考实验代码</a></li>
+                <li><a href="#sec8">实验结果记录与分析</a></li>
+                <li><a href="#sec9">常见报错与问题排查</a></li>
+                <li><a href="#sec10">实验思考题</a></li>
+                <li><a href="#sec11">实验报告提交要求</a></li>
+                <li><a href="#sec12">参考文献</a></li>
+            </ol>
+        </div>
+
+        <h2 id="sec1">一、实验目的</h2>
+        <p>本实验基于卷积神经网络CNN完成花卉图像分类识别任务，属于计算机视觉基础深度学习实验。通过本次实验，学生需要掌握卷积神经网络基础结构、图像数据预处理流程、迁移学习训练方法、模型评估指标等核心内容。</p>
+        <ul>
+            <li>理解卷积层、池化层、全连接层的作用，掌握CNN图像分类基本流程；</li>
+            <li>学会使用PyTorch框架加载图像数据集、构建数据增强流水线；</li>
+            <li>掌握迁移学习方法，使用预训练模型ResNet快速完成花卉分类任务；</li>
+            <li>学习划分训练集、验证集、测试集，使用准确率、混淆矩阵评估模型效果；</li>
+            <li>能够分析欠拟合、过拟合现象，使用Dropout、数据增强、早停策略优化模型；</li>
+            <li>独立完成模型推理，输入花卉图片输出类别与置信度，撰写实验总结。</li>
+        </ul>
+
+        <h2 id="sec2">二、实验预习要求</h2>
+        <p>实验开始前，学生必须提前预习相关知识点，否则很难跟上实验进度。预习内容包括卷积神经网络原理、梯度下降、反向传播、迁移学习、图像数据增强方法。同时需要提前安装好Python环境以及深度学习依赖库，预习数据集结构，了解Flower数据集包含的花卉类别。预习时思考：为什么图像分类任务适合使用卷积神经网络？迁移学习相比从头训练模型有什么优势？
+        </p>
+        <div class="note">
+            <strong>预习检查点：</strong>能够说出卷积、池化的作用；能区分训练集、验证集、测试集用途；知道过拟合的常见解决办法。
+        </div>
+
+        <h2 id="sec3">三、实验环境与软硬件配置</h2>
+        <h3>硬件环境</h3>
+        <ul>
+            <li>推荐：搭载NVIDIA独立显卡（显存≥4G）PC，支持CUDA加速；</li>
+            <li>最低配置：CPU环境，无GPU也可运行（训练速度很慢）；</li>
+        </ul>
+        <h3>软件环境</h3>
+        <ul>
+            <li>Python版本：3.9 ~ 3.11</li>
+            <li>深度学习框架：PyTorch 2.x + torchvision</li>
+            <li>依赖库：numpy, matplotlib, pillow, scikit-learn</li>
+            <li>开发工具：VS Code / PyCharm / Jupyter Notebook</li>
+        </ul>
+        <div class="code-block">
+            # 环境安装命令
+            pip install torch torchvision numpy matplotlib pillow scikit-learn
+        </div>
+
+        <h2 id="sec4">四、实验数据集介绍</h2>
+        <p>本实验采用经典Flower17花卉数据集，该数据集是计算机视觉课程常用小型分类数据集，一共包含17类不同花卉，每一类花卉有80张图片，数据集总图片数量1360张。花卉种类包含郁金香、雏菊、玫瑰、水仙、风信子等。图片分辨率不统一，存在光照变化、角度变化、背景干扰，非常适合用来练习图像分类。
+        </p>
+        <p>数据集目录结构规范要求：采用分类文件夹格式，每一类图片放入对应名称文件夹，方便torchvision的ImageFolder直接加载。实验时按照7:2:1划分：70%训练集、20%验证集、10%测试集。训练集用来更新网络权重；验证集在训练过程中监控精度，用来调整超参数；测试集全程不参与训练，只用来最终评估模型泛化能力。
+        </p>
+        <table>
+            <tr>
+                <th>数据集子集</th>
+                <th>占比</th>
+                <th>作用</th>
+            </tr>
+            <tr>
+                <td>训练集 train</td>
+                <td>70%</td>
+                <td>网络参数学习、反向传播更新权重</td>
+            </tr>
+            <tr>
+                <td>验证集 val</td>
+                <td>20%</td>
+                <td>调参、观察过拟合、早停判断</td>
+            </tr>
+            <tr>
+                <td>测试集 test</td>
+                <td>10%</td>
+                <td>最终模型泛化性能评估</td>
+            </tr>
+        </table>
+
+        <h2 id="sec5">五、实验原理</h2>
+        <h3>1.卷积神经网络CNN</h3>
+        <p>卷积神经网络依靠卷积核提取图像底层、中层、高层特征：底层特征是边缘、线条、色块；中层特征是花瓣轮廓、纹理；高层特征是完整花卉形态。池化层用来降低特征图尺寸，减少参数量，提升特征鲁棒性。全连接层把二维特征图展平为一维向量，最后输出各个类别的概率。
+        </p>
+        <h3>2.迁移学习</h3>
+        <p>在ImageNet大数据集上预训练好的ResNet已经学习到通用视觉特征，我们只需要替换最后一层分类头，在花卉数据集上微调。相比从零训练，迁移学习收敛更快、小数据集下不容易过拟合，是图像分类项目最常用方案。</p>
+        <h3>3.数据增强</h3>
+        <p>数据增强通过随机裁剪、随机翻转、随机旋转、亮度扰动等方式生成新样本，扩充数据集，抑制过拟合。测试集只做归一化、缩放，不使用随机增强，保证评估稳定。</p>
+        <h3>4.损失函数与优化器</h3>
+        <p>多分类任务使用交叉熵损失CrossEntropyLoss；优化器选用Adam，自适应学习率，收敛速度优于SGD。评价指标使用分类准确率Accuracy。</p>
+
+        <h2 id="sec6">六、实验内容与详细步骤</h2>
+        <ol>
+            <li>数据集下载、解压，按照train/val/test整理文件夹结构；</li>
+            <li>编写数据增强transform，构建Dataset、DataLoader加载器；</li>
+            <li>加载预训练ResNet18，修改最后一层输出为17类；</li>
+            <li>定义损失函数、优化器，设置训练轮次epoch、batch size、学习率；</li>
+            <li>编写训练循环：前向传播、计算损失、反向传播、参数更新；每轮结束在验证集测试精度；</li>
+            <li>记录训练损失、验证精度，绘制loss-acc曲线；</li>
+            <li>训练完成后，在独立测试集上计算最终准确率；</li>
+            <li>单张图片推理：输入一张花卉图片，输出类别名称和置信度；</li>
+            <li>调整超参数（学习率、batch size、是否冻结主干网络）重复实验，对比结果；</li>
+            <li>记录实验现象，分析模型错误识别样本，撰写实验报告。</li>
+        </ol>
+        <div class="warning">
+            <strong>重要提醒：</strong>测试集数据绝对不能参与训练和调参，不能根据测试集结果修改网络和超参数，否则评估结果虚高，失去参考意义。
+        </div>
+
+        <h2 id="sec7">七、参考实验代码（PyTorch）</h2>
+        <div class="code-block">
+            import torch
+            import torch.nn as nn
+            import torch.optim as optim
+            from torchvision import datasets, transforms, models
+            from torch.utils.data import DataLoader
+            import matplotlib.pyplot as plt
+
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            print("使用设备：", device)
+
+            # 数据预处理与增强
+            train_transform = transforms.Compose([
+            transforms.Resize((224,224)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
+            ])
+            val_test_transform = transforms.Compose([
+            transforms.Resize((224,224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
+            ])
+
+            # 加载数据集（修改为你本地路径）
+            train_dataset = datasets.ImageFolder(root="./flower/train", transform=train_transform)
+            val_dataset = datasets.ImageFolder(root="./flower/val", transform=val_test_transform)
+            test_dataset = datasets.ImageFolder(root="./flower/test", transform=val_test_transform)
+
+            train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+            val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+            test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+
+            class_names = train_dataset.classes
+            print("类别列表：", class_names)
+
+            # 加载预训练ResNet18
+            model = models.resnet18(pretrained=True)
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, 17)
+            model = model.to(device)
+
+            criterion = nn.CrossEntropyLoss()
+            optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+            def train_one_epoch(model, loader, criterion, opt, dev):
+            model.train()
+            total_loss = 0.0
+            correct = 0
+            total = 0
+            for imgs, labels in loader:
+            imgs, labels = imgs.to(dev), labels.to(dev)
+            opt.zero_grad()
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            opt.step()
+            total_loss += loss.item()
+            _, pred = torch.max(outputs,1)
+            correct += (pred == labels).sum().item()
+            total += labels.size(0)
+            return total_loss / len(loader), correct / total
+
+            def val_one_epoch(model, loader, criterion, dev):
+            model.eval()
+            total_loss = 0.0
+            correct = 0
+            total = 0
+            with torch.no_grad():
+            for imgs, labels in loader:
+            imgs, labels = imgs.to(dev), labels.to(dev)
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item()
+            _, pred = torch.max(outputs,1)
+            correct += (pred == labels).sum().item()
+            total += labels.size(0)
+            return total_loss / len(loader), correct / total
+
+            num_epochs = 15
+            train_loss_list, val_acc_list = [], []
+            for epoch in range(num_epochs):
+            tr_loss, tr_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+            va_loss, va_acc = val_one_epoch(model, val_loader, criterion, device)
+            train_loss_list.append(tr_loss)
+            val_acc_list.append(va_acc)
+            print(f"Epoch [{epoch+1}/{num_epochs}] Train Loss:{tr_loss:.4f} Val Acc:{va_acc:.4f}")
+
+            # 测试集评估
+            _, test_acc = val_one_epoch(model, test_loader, criterion, device)
+            print(f"==== 测试集最终准确率：{test_acc:.4f} ====")
+
+            # 保存模型
+            torch.save(model.state_dict(), "./flower_resnet18.pth")
+            print("模型已保存")
+        </div>
+
+        <h2 id="sec8">八、实验结果记录与分析</h2>
+        <p>训练过程中，需要记录每一轮训练损失、验证集准确率。正常情况下，训练损失逐步下降，验证准确率逐步上升，后期趋于平稳。如果训练集准确率很高、验证集准确率很低，说明模型发生过拟合，需要增加数据增强、添加Dropout、减少训练轮数、降低学习率。如果训练集准确率一直很低，属于欠拟合，可以增加训练轮次、调高学习率、检查数据集标注是否出错。
+        </p>
+        <p>实验完成后，挑选几张识别正确、识别错误的样本截图放入报告。错误样本大多来自：花卉和背景高度混杂、光照过暗、同类花卉形态差异大、不同类别花卉外观高度相似。分析错误样本是实验报告得分重点。</p>
+
+        <h2 id="sec9">九、常见报错与问题排查</h2>
+        <ul>
+            <li>RuntimeError: CUDA out of memory：显存不足，调小batch size，或者切换CPU运行；</li>
+            <li>ImageFolder读取不到图片：检查文件夹路径，图片必须放在二级分类文件夹内；</li>
+            <li>准确率一直很低：检查归一化均值方差是否和预训练模型匹配、标签是否错乱；</li>
+            <li>loss不下降：学习率设置不合理，学习率过大震荡、过小收敛极慢；</li>
+        </ul>
+
+        <h2 id="sec10">十、实验思考题</h2>
+        <ol>
+            <li>为什么迁移学习在小数据集花卉识别任务中效果远好于从头训练CNN？</li>
+            <li>数据增强为什么能够缓解过拟合？测试集为什么不能使用随机增强？</li>
+            <li>如果新增3类花卉，怎么在已经训练好的模型上继续训练？</li>
+            <li>除了ResNet，还可以选用哪些适合图像分类的网络？各自特点是什么？</li>
+            <li>混淆矩阵可以提供哪些单纯准确率无法体现的信息？</li>
+        </ol>
+
+        <h2 id="sec11">十一、实验报告提交要求</h2>
+        <p>实验报告包含：实验目的、原理、实验环境、数据集说明、实验步骤、核心代码、训练曲线截图、测试结果、错误样本分析、思考题回答、实验总结。报告格式规范，代码需要添加注释，禁止直接复制代码不加分析。提交同时附带训练日志、模型结果截图。
+        </p>
+
+        <h2 id="sec12">十二、参考文献</h2>
+        <ul>
+            <li>He K, et al. Deep Residual Learning for Image Recognition, CVPR 2016</li>
+            <li>PyTorch官方文档 torchvision 图像分类教程</li>
+            <li>《深度学习》Ian Goodfellow 中文译本</li>
+            <li>《动手学深度学习》阿斯顿·张</li>
+        </ul>
+
+        <div class="footer">
+            深度学习花卉图像识别实验指导书 | 计算机视觉实验课程
+        </div>
+    </div>
+</body>
+
+</html>

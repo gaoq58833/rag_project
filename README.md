@@ -2,7 +2,7 @@
 
 面向 RAG 的文档解析与分块工具：把 PDF / Word 转成带结构的 markdown，再切成语义完整、可溯源、可返回原图的块，并配套一套百分制量化评测。
 
-当前覆盖 **PDF** 和 **Word（.docx）** 两类文档。
+当前覆盖 **PDF**、**Word（.docx）**、**Markdown**、**HTML**、**TXT** 五类文档。
 
 ---
 
@@ -18,6 +18,9 @@
 | --------- | -------------------------------------------- | ------------------------------------------------------------------ |
 | PDF 解析  | `src/parsers/pdf_parser.py`                  | docling：版式模型定位段落/表格，TableFormer 还原表格，图片另存本地 |
 | Word 解析 | `src/parsers/word_parser.py`                 | python-docx 直接读 OOXML，不用模型、无 OCR 噪音                    |
+| MD 解析   | `src/parsers/markdown_parser.py`             | 直接读 .md，复用清洗与分块逻辑                                     |
+| HTML 解析 | `src/parsers/html_parser.py`                 | 去除 <script>/<style>，正文转 markdown，编码自动回退               |
+| TXT 解析  | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                       |
 | 表格处理  | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                       |
 | 清洗      | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                             |
 | 分块      | `src/parsers/chunker.py`                     | 段落优先的降级分块 + 章节路径 + 表格原子单元 + 图片归属            |
@@ -93,7 +96,43 @@ result = WordParser().parse("test_file/xxx.docx")
 - 图片同时兼容新格式 `a:blip` 和老式 VML `v:imagedata`，**表格单元格里的图片也会提取**
 - Word 没有页的概念，`total_pages` 固定为 0
 
-### 3.3 TextChunker
+### 3.3 MarkdownParser
+
+```python
+from src.parsers.markdown_parser import MarkdownParser
+
+result = MarkdownParser().parse("test_file/xxx.md")
+```
+
+- 直接读取 `.md` / `.markdown`，不做格式转换
+- 表格（`|...|` 行）会被抽取并复用 `TableProcessor` 规范化
+- 标题沿用 markdown 原生 `#` 语法，分块时可正常生成章节路径
+
+### 3.4 HTMLParser
+
+```python
+from src.parsers.html_parser import HTMLParser
+
+result = HTMLParser().parse("test_file/xxx.html")
+```
+
+- 去除 `<script>`、`<style>`、注释等噪音，正文转 markdown
+- 编码不固定时按 `utf-8 → utf-8-sig → gb18030` 顺序回退解码
+- 表格、列表、标题等结构尽量保留，代码块用围栏包裹
+
+### 3.5 TXTParser
+
+```python
+from src.parsers.txt_parser import TXTParser
+
+result = TXTParser().parse("test_file/xxx.txt")
+```
+
+- TXT 结构化弱，**不做标题入栈**，分块走段落策略（空行分段 → 句子 → 字符）
+- 编码按 `utf-8 → utf-8-sig → gb18030` 回退，兼容常见中文文本编码
+- 无表格/图片，`table_count` 为 0，`section` 字段留空
+
+### 3.6 TextChunker
 
 ```python
 from src.parsers.chunker import TextChunker, ChunkStrategy
@@ -142,6 +181,9 @@ chunks = chunker.split(markdown_text)
 | `python tests/test_chunker.py`                | PDF 全流程 → 分块 → 写 `data/chunk_test/`        |
 | `python tests/test_word.py`                   | Word 解析 → 分块 → 写 `data/word_test/`          |
 | `python tests/test_word.py <docx> <输出目录>` | 测指定文档                                       |
+| `python tests/test_markdown.py`               | Markdown 解析 → 分块 → 写 `data/md_test/`        |
+| `python tests/test_html.py`                   | HTML 解析 → 分块 → 写 `data/html_test/`          |
+| `python tests/test_txt.py`                    | TXT 解析 → 分块 → 写 `data/txt_test/`            |
 | `python tests/make_test_docx.py`              | 生成结构化测试文档 `test_file/rag_test_doc.docx` |
 
 `test_*.py` 都会同时报告：解析覆盖率、块数、超限/碎片块、丢失字符、重复字符、章节路径覆盖、图片归属。
@@ -170,9 +212,11 @@ python 量化/eval_chunks.py                     # 默认评 data/chunk_test，�
 
 | 样本                             | 解析准确率                       | 分块得分 | 备注                            |
 | -------------------------------- | -------------------------------- | -------- | ------------------------------- |
-| PDF（RNN 情感分类实验）          | 表格 96.13% / 全文字符 F1 98.94% | 96.1     | 已知缺陷：`环节` 表最后一行丢失 |
+| PDF（RNN 情感分类实验）          | 表格 96.13% / 全文字符 F1 98.94% | 95.2     | 已知缺陷：`环节` 表最后一行丢失 |
 | 真实 Word（对称密码实验报告）    | 100%                             | 70.0     | 无标题样式、主体是一张大表      |
-| 自造 Word（`rag_test_doc.docx`） | 100%                             | 81.9     | 四级标题、长表、图文混排全覆盖  |
+| 自造 Word（`rag_test_doc.docx`） | 100%                             | 88.0     | 四级标题、长表、图文混排全覆盖  |
+| Markdown（RNN 实验 .md）         | 100%                             | 89.1     | 代码密集，提示语单独成块        |
+| HTML（`rag_test_doc.html`）      | 100%                             | 100.0    | 代码块 + 章节路径全部正确       |
 
 详细指标见 [量化/指标记录.md](量化/指标记录.md)，踩坑记录见 [ERRORS.md](ERRORS.md)。
 
@@ -185,6 +229,9 @@ src/parsers/          解析器与分块器
   base.py             BaseParser / ParseResult 抽象
   pdf_parser.py       docling PDF 解析
   word_parser.py      python-docx Word 解析
+  markdown_parser.py  Markdown 解析
+  html_parser.py      HTML 转 markdown
+  txt_parser.py       纯文本解析（段落策略）
   table_parser.py     表格合并与转换
   cleaner.py          文本清洗
   chunker.py          分块策略
@@ -195,6 +242,9 @@ data/
   chunk_test/         PDF 分块结果
   word_test/          真实 Word 分块结果
   word_test_gen/      自造 Word 分块结果
+  md_test/            Markdown 分块结果
+  html_test/          HTML 分块结果
+  txt_test/           TXT 分块结果
 test_file/            测试样本
 ```
 

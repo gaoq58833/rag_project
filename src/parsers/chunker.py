@@ -3,6 +3,8 @@ from typing import Dict, List, Optional
 
 # 章节切换最小切分长度：上一章内容不足这个长度时与下一章合并成一块，避免切出大量碎块
 SECTION_SPLIT_MIN = 400
+# 正文块理想长度下限：不足此长度的引导语优先并入后续代码/表格块，避免大量短正文块
+IDEAL_MIN = 400
 
 class ChunkStrategy:
     """分块策略枚举"""
@@ -63,7 +65,11 @@ class TextChunker:
             3. 表格单元单独成块：整表放得下就是一整块，放不下就按行窗口切，
                每个子块都重复表头并带「第 x-y 行 / 共 N 行」前缀。
             4. 图片不单独成块：引用行并入当前文本块，路径记入该块的 images 字段，
-               检索命中后按路径取原图展示。
+               检索命中后按路径取原图展示。base64 内嵌图仅保留 alt 占位，不塞进块内容。
+            5. 代码块（```lang ... ```）单独成块：按行窗口切分，块间不加 overlap，
+               每块带「代码 · 第 x-y 行 / 共 N 行」前缀并保留语言围栏；单行超长代码按字符兜底切分。
+            6. 标题行独立成块以保证章节路径正确；单行标题若紧跟代码/表格则挂起并拼到其首块，
+               避免标题独占一个碎片块；代码/表格前不足 400 字的引导语也优先拼到首块。
         '''
         chunks = []
         current_chunk = ""
@@ -72,6 +78,7 @@ class TextChunker:
         stack = []            # 标题栈：[(层级, 标题)]
         span = []             # 当前块覆盖到的章节路径，块跨章节时会有多条
         pending_images = []   # 已遇到但还没归属到块的图片路径
+        pending_heading = ""  # 单行标题暂存：拼到下一个块开头，避免标题独占一个碎片块
 
         def label():
           # 块内跨章节时，把所有章节路径都标出来
@@ -102,30 +109,94 @@ class TextChunker:
             current_chunk = ""
 
         for kind, body in self._split_blocks(text):
+            # 挂起的单行标题：拼到下一个块的开头，避免标题独占一个不足 min 的碎片块
+            if pending_heading:
+                if kind == "text":
+                    current_chunk = current_chunk + "\n\n" + pending_heading if current_chunk else pending_heading
+                    pending_heading = ""
+                elif kind == "image":
+                    current_chunk = current_chunk + "\n\n" + pending_heading if current_chunk else pending_heading
+                    pending_heading = ""
+                # table / code 在各自分支里把挂起标题拼到第一个子块上
+
             # 图片：引用行原样并入当前块内容，路径记入 pending_images，随下一次 emit 归属到块
             if kind == "image":
                 m = re.match(r'^\s*(!\[.*?\]\((.*?)\))\s*$', body)
+                path = m.group(2)
+                if path.startswith("data:"):
+                    # base64 内嵌图：不把整段 base64 塞进块内容，否则单块动辄几万字；
+                    # 仅保留 alt 文本占位，路径照样记入 images 字段（由上层解析器负责把图存成本地文件后替换）
+                    img_md = re.match(r'^(!\[[^\]]*\])', m.group(1)).group(1)
+                else:
+                    img_md = m.group(1)
                 if not current_chunk and chunks:
                     # 紧跟在已输出块（如表格）之后的图片属于上一个块：
                     # 典型场景是截图插在表格单元格里，解析后引用行排在表格后面。
                     # 只记 images 字段、不动 content：路径引用不是检索内容，避免把块撑超长
-                    chunks[-1].setdefault("images", []).append(m.group(2))
+                    chunks[-1].setdefault("images", []).append(path)
                     continue
-                current_chunk = current_chunk + "\n\n" + m.group(1) if current_chunk else m.group(1)
-                pending_images.append(m.group(2))
+                current_chunk = current_chunk + "\n\n" + img_md if current_chunk else img_md
+                pending_images.append(path)
                 continue
 
             # 表格：先收尾当前文本块，再把表格按行窗口输出
             if kind == "table":
+                lead = ""
                 if current_chunk.strip():
-                    emit(current_chunk)   # 表格前的正文先落盘，避免表格切分打乱原文顺序
-                    current_chunk = ""
-                for content in self._split_table(body):
+                    if len(current_chunk) >= IDEAL_MIN:
+                        emit(current_chunk)
+                        current_chunk = ""
+                    else:
+                        lead = current_chunk  # 表格前的引导语不足理想长度，拼到表格首块（同属一个语义单元）
+                        current_chunk = ""
+                if pending_heading:
+                    lead = (lead + "\n" + pending_heading) if lead else pending_heading
+                    pending_heading = ""
+                sub = self._split_table(body)
+                if lead and sub:
+                    if len(lead) + 1 + len(sub[0]) <= self.max_chunk_size:
+                        # 前缀行(【表格...)放最前，保证可追溯判定；引导语接在前缀之后、表格之前
+                        first_line, rest = sub[0].split("\n", 1)
+                        sub[0] = first_line + "\n" + lead + "\n" + rest
+                    else:
+                        emit(lead)
+                for content in sub:
                     chunks.append({
                         "content": content,
                         "index": chunk_index,
                         "length": len(content),
                         "type": "table",
+                        "section": section
+                    })
+                    chunk_index += 1
+                continue
+
+            # 代码块：先收尾当前文本块，再按行窗口输出（代码行之间不做 overlap，重复代码无意义）
+            if kind == "code":
+                lead = ""
+                if current_chunk.strip():
+                    if len(current_chunk) >= IDEAL_MIN:
+                        emit(current_chunk)
+                        current_chunk = ""
+                    else:
+                        lead = current_chunk
+                        current_chunk = ""
+                if pending_heading:
+                    lead = (lead + "\n" + pending_heading) if lead else pending_heading
+                    pending_heading = ""
+                sub = self._split_code(body)
+                if lead and sub:
+                    if len(lead) + 1 + len(sub[0]) <= self.max_chunk_size:
+                        first_line, rest = sub[0].split("\n", 1)
+                        sub[0] = first_line + "\n" + lead + "\n" + rest
+                    else:
+                        emit(lead)
+                for content in sub:
+                    chunks.append({
+                        "content": content,
+                        "index": chunk_index,
+                        "length": len(content),
+                        "type": "code",
                         "section": section
                     })
                     chunk_index += 1
@@ -138,10 +209,6 @@ class TextChunker:
             # 标题行：更新标题栈；上一章够长就先收尾，然后统一走下面的长度判断
             heading = re.match(r'^(#{1,6})\s+(.+?)\s*$', para.split("\n")[0])
             if heading:
-                # 章节切换：上一章内容够长才单独成块，太短就继续累加，避免切出一堆碎块
-                if len(current_chunk) >= SECTION_SPLIT_MIN:
-                    emit(current_chunk)
-                    current_chunk = ""
                 level, title = len(heading.group(1)), heading.group(2)
                 while stack and stack[-1][0] >= level:
                     stack.pop()
@@ -149,6 +216,14 @@ class TextChunker:
                 section = " > ".join(t for _, t in stack)
                 if not span or span[-1] != section:
                     span.append(section)
+                # 单行标题（后面紧跟代码/表格/图片/下一个标题）：挂起，拼到下一个块开头
+                if para.count("\n") == 0:
+                    pending_heading = para
+                    continue
+                # 标题后还有正文：先收尾上一章够长的内容，再让标题带着正文一起走下面的长度判断
+                if len(current_chunk) >= SECTION_SPLIT_MIN:
+                    emit(current_chunk)
+                    current_chunk = ""
 
             # 当前块 + 新块 > 最大块大小
             if len(current_chunk) + len(para) > self.max_chunk_size:
@@ -182,13 +257,17 @@ class TextChunker:
         # 收尾：剩余的尾部内容直接成块，不因长度不足而丢弃
         if current_chunk.strip():
             emit(current_chunk)
+        elif pending_heading:
+            # 文档末尾是单行标题，没有后续块可拼，单独成块
+            emit(pending_heading)
+            pending_heading = ""
         # 文档末尾遗留的图片（后面没有正文块可挂）挂到最后一块上
         if pending_images and chunks:
             chunks[-1].setdefault("images", []).extend(pending_images)
         return chunks
 
     def _split_blocks(self, text: str) -> List[tuple]:
-        """把全文切成 ("text", 段落)、("table", 表格)、("image", 图片路径) 三类单元，表格不跨块"""
+        """把全文切成 ("text", 段落)、("table", 表格)、("image", 图片路径)、("code", 代码块) 四类单元，表格/代码不跨块"""
         blocks = []
         buf = []
 
@@ -203,6 +282,20 @@ class TextChunker:
         i = 0
         while i < len(lines):
             line = lines[i]
+            # 围栏代码块：必须在表格之前判断，因为代码行可能以 | 开头被误判成表格
+            fence = re.match(r'^\s*```([a-zA-Z0-9_+-]*)\s*$', line)
+            if fence:
+                flush_text()
+                code_lines = [line]
+                i += 1
+                while i < len(lines) and not re.match(r'^\s*```\s*$', lines[i]):
+                    code_lines.append(lines[i])
+                    i += 1
+                if i < len(lines):
+                    code_lines.append(lines[i])  # 闭合围栏
+                    i += 1
+                blocks.append(("code", "\n".join(code_lines)))
+                continue
             img = re.match(r'^\s*!\[.*?\]\((.*?)\)\s*$', line)
             if img:
                 # 图片引用行单独成单元（保留完整行，alt 文本不丢），不并入段落，保证路径能归属到正确的块
@@ -219,7 +312,12 @@ class TextChunker:
                     i += 1
                 blocks.append(("table", "\n".join(table_lines)))
                 continue
-            if not line.strip():
+            if re.match(r'^#{1,6}\s', line):
+                # 标题行：先 flush 前面的正文，让标题独立成块，
+                # 否则 "## 五\n### 1.x" 这种无空行的相邻标题会被当成同一块，只有第一个标题被识别
+                flush_text()
+                buf.append(line)
+            elif not line.strip():
                 flush_text()
             else:
                 buf.append(line)
@@ -262,6 +360,55 @@ class TextChunker:
     @staticmethod
     def _table_prefix(start: int, end: int, total: int) -> str:
         return f"【表格 · 第{start}-{end}行/共{total}行】\n"
+
+    def _split_code(self, markdown: str) -> List[str]:
+        """代码块按行窗口切分，不加 overlap：代码重复没有语义价值，反而会误导检索。
+        每个子块带【代码 · 第x-y行/共N行】前缀，并保留开头的语言围栏。
+        单行超长（docling 可能把整段代码压成一行）时按字符宽度兜底切分。"""
+        lines = markdown.split("\n")
+        if len(lines) < 2:
+            return [markdown]
+        # 第一行是 ```lang，最后一行是 ```；中间是代码内容
+        open_fence = lines[0]
+        inner = lines[1:-1] if re.match(r'^\s*```\s*$', lines[-1]) else lines[1:]
+        total = len(inner)
+        if total == 0:
+            return [f"{open_fence}\n```"]
+
+        prefix_len = len("【代码 · 第x-y行/共N行】\n")
+        # 单行字符预算：给前缀和开头围栏留出空间
+        line_budget = self.max_chunk_size - prefix_len - len(open_fence) - 1
+
+        chunks = []
+        current = []
+        start = 1
+        for idx, line in enumerate(inner, start=1):
+            # 单行本身就超长（PDF 转 markdown 常把代码压成一行）：按字符兜底切
+            if len(line) > line_budget:
+                if current:
+                    chunks.append(self._code_prefix(start, idx - 1, total) + "\n".join([open_fence] + current))
+                    current = []
+                pos = 0
+                while pos < len(line):
+                    seg = line[pos:pos + line_budget]
+                    chunks.append(self._code_prefix(idx, idx, total) + f"{open_fence}\n{seg}")
+                    pos += line_budget
+                start = idx + 1
+                continue
+            trial = len("\n".join([open_fence] + current + [line])) + prefix_len
+            if current and trial > self.max_chunk_size:
+                chunks.append(self._code_prefix(start, idx - 1, total) + "\n".join([open_fence] + current))
+                start = idx
+                current = []
+            current.append(line)
+
+        if current:
+            chunks.append(self._code_prefix(start, total, total) + "\n".join([open_fence] + current))
+        return chunks
+
+    @staticmethod
+    def _code_prefix(start: int, end: int, total: int) -> str:
+        return f"【代码 · 第{start}-{end}行/共{total}行】\n"
 
     @staticmethod
     def _is_separator(line: str) -> bool:
