@@ -194,9 +194,59 @@ chunks = chunker.split(markdown_text)
 
 ---
 
-## 4. 测试与评测
+## 4. HTTP API（FastAPI）
 
-### 4.1 跑测试
+基于 FastAPI + uvicorn，文件上传用 python-multipart。
+
+### 启动
+
+```bash
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+# 或
+python -m src.api.main
+```
+
+启动时会预热 PDFParser（加载 docling 模型），首次请求不再卡顿。API 文档自动生成在 `/docs`（Swagger UI）和 `/redoc`。
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+| ---- | ---- | ---- |
+| `GET`  | `/health` | 健康检查 |
+| `GET`  | `/formats` | 返回支持的扩展名列表 |
+| `POST` | `/parse` | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块） |
+| `POST` | `/chunk` | 上传文件 → 解析并分块，返回 `chunks` 列表 |
+
+`/chunk` 支持查询参数覆盖默认分块大小：`?max_chunk_size=800&min_chunk_size=100&chunk_overlap=150`。
+
+### 调用示例
+
+```python
+import requests
+
+# 解析
+with open("报告.pdf", "rb") as f:
+    r = requests.post("http://localhost:8000/parse", files={"file": f})
+print(r.json()["raw_text"])
+
+# 解析并分块
+with open("笔记.txt", "rb") as f:
+    r = requests.post("http://localhost:8000/chunk", files={"file": f})
+for c in r.json()["chunks"]:
+    print(c["type"], c["length"], c["content"][:50])
+```
+
+```bash
+curl -X POST http://localhost:8000/chunk -F "file=@test_file/sample.txt"
+```
+
+错误处理：不支持的格式返回 `400`，解析失败返回 `500`。
+
+---
+
+## 5. 测试与评测
+
+### 5.1 跑测试
 
 | 命令                                          | 作用                                             |
 | --------------------------------------------- | ------------------------------------------------ |
@@ -210,11 +260,12 @@ chunks = chunker.split(markdown_text)
 | `python tests/test_html.py`                   | HTML 解析 → 分块 → 写 `data/html_test/`          |
 | `python tests/test_txt.py`                    | TXT 解析 → 分块 → 写 `data/txt_test/`            |
 | `python tests/test_factory.py`                | 解析器工厂：路由、单例、自定义参数、错误处理      |
+| `python tests/test_api.py`                    | FastAPI 接口：health/parse/chunk/错误处理        |
 | `python tests/make_test_docx.py`              | 生成结构化测试文档 `test_file/rag_test_doc.docx` |
 
 `test_*.py` 都会同时报告：解析覆盖率、块数、超限/碎片块、丢失字符、重复字符、章节路径覆盖、图片归属。
 
-### 4.2 打分
+### 5.2 打分
 
 ```bash
 # 参数：数据目录 [章节号] [章节标题]
@@ -234,7 +285,7 @@ python 量化/eval_chunks.py                     # 默认评 data/chunk_test，�
 
 样本特有的客观性说明放在数据目录的 `notes.md` 里，重跑评测时自动带上。
 
-### 4.3 当前实测
+### 5.3 当前实测
 
 | 样本                             | 解析准确率                       | 分块得分 | 备注                            |
 | -------------------------------- | -------------------------------- | -------- | ------------------------------- |
@@ -248,20 +299,24 @@ python 量化/eval_chunks.py                     # 默认评 data/chunk_test，�
 
 ---
 
-## 5. 目录结构
+## 6. 目录结构
 
 ```
-src/parsers/          解析器与分块器
-  base.py             BaseParser / ParseResult 抽象
-  factory.py          解析器工厂（自动选格式 + 单例缓存）
-  pdf_parser.py       docling PDF 解析
-  word_parser.py      python-docx Word 解析
-  markdown_parser.py  Markdown 解析
-  html_parser.py      HTML 转 markdown
-  txt_parser.py       纯文本解析（段落策略）
-  table_parser.py     表格合并与转换
-  cleaner.py          文本清洗
-  chunker.py          分块策略
+src/
+  parsers/            解析器与分块器
+    base.py           BaseParser / ParseResult 抽象
+    factory.py        解析器工厂（自动选格式 + 单例缓存）
+    pdf_parser.py     docling PDF 解析
+    word_parser.py    python-docx Word 解析
+    markdown_parser.py Markdown 解析
+    html_parser.py    HTML 转 markdown
+    txt_parser.py     纯文本解析（段落策略）
+    table_parser.py   表格合并与转换
+    cleaner.py        文本清洗
+    chunker.py        分块策略
+  api/                FastAPI 接口
+    main.py           应用入口与路由
+    schemas.py        Pydantic 响应模型
 tests/                各环节测试脚本
 量化/                 评测脚本与指标记录
 data/
@@ -277,7 +332,7 @@ test_file/            测试样本
 
 ---
 
-## 6. 已知限制
+## 7. 已知限制
 
 1. **`.doc` 老格式不支持**：python-docx 读不了 OLE 二进制。转换方案：
    - Windows：Word COM 自动化（本机已装 Word）
