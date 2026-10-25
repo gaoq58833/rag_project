@@ -351,15 +351,21 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
 ### 接口列表
 
-| 方法 | 路径        | 说明                                                       |
-| ---- | ----------- | ---------------------------------------------------------- |
-| GET  | `/health`   | 健康检查                                                   |
-| GET  | `/formats`  | 返回支持的扩展名列表                                       |
-| POST | `/parse`    | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块） |
-| POST | `/chunk`    | 上传文件 → 解析并分块，返回 `chunks` 列表                  |
-| POST | `/ingest`   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant    |
-| POST | `/retrieve` | `query` → 向量召回 → 重排 → 返回相关块（含来源）           |
-| POST | `/chat`     | `query` → 检索 → LLM 生成回答 + 引用来源                   |
+| 方法 | 路径             | 鉴权 | 说明                                                       |
+| ---- | ---------------- | ---- | ---------------------------------------------------------- |
+| GET  | `/health`        | 否   | 健康检查                                                   |
+| GET  | `/formats`       | 否   | 返回支持的扩展名列表                                       |
+| POST | `/parse`         | 否   | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块） |
+| POST | `/chunk`         | 否   | 上传文件 → 解析并分块，返回 `chunks` 列表                  |
+| POST | `/auth/register` | 否   | 用户注册，返回 JWT token                                   |
+| POST | `/auth/login`    | 否   | 用户名密码登录，返回 JWT token                             |
+| GET  | `/auth/me`       | 是   | 获取当前登录用户信息                                       |
+| POST | `/ingest`        | 是   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant    |
+| POST | `/retrieve`      | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）           |
+| POST | `/chat`          | 是   | `query` → 检索 → LLM 生成回答 + 引用来源                   |
+
+> 鉴权接口需在请求头携带 `Authorization: Bearer <token>`。
+> LLM 生成参数：`temperature=0.2`、`max_tokens=2048`。
 
 `/chunk` 支持查询参数覆盖分块大小：`?max_chunk_size=800&min_chunk_size=100&chunk_overlap=150`。
 `/retrieve` 支持 `?query=xxx&top_k=10&use_rerank=true`。
@@ -369,43 +375,59 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```python
 import requests
 
-# 解析
+BASE = "http://localhost:8000"
+
+# 注册
+r = requests.post(f"{BASE}/auth/register", json={"username": "alice", "password": "secret123"})
+token = r.json()["access_token"]
+headers = {"Authorization": f"Bearer {token}"}
+
+# 解析（无需鉴权）
 with open("报告.pdf", "rb") as f:
-    r = requests.post("http://localhost:8000/parse", files={"file": f})
+    r = requests.post(f"{BASE}/parse", files={"file": f})
 print(r.json()["raw_text"])
 
-# 解析并分块
+# 解析并分块（无需鉴权）
 with open("笔记.txt", "rb") as f:
-    r = requests.post("http://localhost:8000/chunk", files={"file": f})
+    r = requests.post(f"{BASE}/chunk", files={"file": f})
 for c in r.json()["chunks"]:
     print(c["type"], c["length"], c["content"][:50])
 
-# 入库到知识库
+# 入库到知识库（需鉴权）
 with open("实验报告.docx", "rb") as f:
-    r = requests.post("http://localhost:8000/ingest", files={"file": f})
+    r = requests.post(f"{BASE}/ingest", files={"file": f}, headers=headers)
 print(r.json())  # {filename, chunk_count, stored_count}
 
-# 检索
-r = requests.post("http://localhost:8000/retrieve", params={"query": "循环神经网络原理"})
+# 检索（需鉴权）
+r = requests.post(f"{BASE}/retrieve", params={"query": "循环神经网络原理"}, headers=headers)
 for c in r.json()["results"]:
     print(f"[{c['score']:.3f}] {c['section']} | {c['content'][:60]}")
 
-# 问答
-r = requests.post("http://localhost:8000/chat", json={"query": "RNN 为什么能处理序列？", "use_rerank": True})
+# 问答（需鉴权）
+r = requests.post(f"{BASE}/chat", json={"query": "RNN 为什么能处理序列？", "use_rerank": True}, headers=headers)
 print(r.json()["answer"])
 for s in r.json()["sources"]:
     print(f"  - 来源: {s['filename']} > {s['section']}")
 ```
 
 ```bash
+# 注册/登录拿 token
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"secret123"}' | jq -r .access_token)
+
 # 入库
-curl -X POST http://localhost:8000/ingest -F "file=@test_file/sample.docx"
+curl -X POST http://localhost:8000/ingest -F "file=@test_file/sample.docx" \
+  -H "Authorization: Bearer $TOKEN"
 
 # 检索
-curl -X POST "http://localhost:8000/retrieve?query=RNN"
+curl -X POST "http://localhost:8000/retrieve?query=RNN" \
+  -H "Authorization: Bearer $TOKEN"
 
 # 问答
-curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"query": "循环神经网络的工作原理"}'
 ```
 
@@ -510,8 +532,12 @@ src/
     qdrant_store.py   Qdrant 封装（本地/服务双模式，HNSW）
   db/                 业务数据库（PostgreSQL）
     database.py       连接池 + 自动建表
-    repository.py     documents / chunks CRUD
+    repository.py     documents / chunks / users CRUD
     schema.sql        建表 SQL
+  auth/               JWT 鉴权
+    security.py       bcrypt 密码哈希
+    jwt.py            JWT 签发与验证
+    deps.py           get_current_user 鉴权依赖
   rag/                RAG 管线
     pipeline.py       ingest_file / retrieve / chat
   config.py           环境变量配置
@@ -587,6 +613,14 @@ Dockerfile.gpu        GPU 版镜像构建
 | ----------------- | ------ | -------------- |
 | `RETRIEVAL_TOP_K` | `10`   | 向量召回数量   |
 | `RERANK_TOP_N`    | `3`    | 重排后保留数量 |
+
+### JWT 鉴权
+
+| 变量                 | 默认值                    | 说明                         |
+| -------------------- | ------------------------- | ---------------------------- |
+| `JWT_SECRET`         | `change-me-in-production` | JWT 签名密钥（生产必须修改） |
+| `JWT_ALGORITHM`      | `HS256`                   | 签名算法                     |
+| `JWT_EXPIRE_MINUTES` | `1440`                    | Token 过期时间（分钟，24h）  |
 
 ### 其他
 

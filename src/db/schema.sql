@@ -37,3 +37,14 @@ CREATE INDEX IF NOT EXISTS idx_chunks_chunk_type ON chunks (chunk_type);
 CREATE INDEX IF NOT EXISTS idx_chunks_section ON chunks (section);
 -- 对 images JSONB 建 GIN 索引，方便按图片路径查询
 CREATE INDEX IF NOT EXISTS idx_chunks_images_gin ON chunks USING GIN (images);
+
+-- 用户表：JWT 鉴权用
+CREATE TABLE IF NOT EXISTS users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username        TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'user',  -- user / admin
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);

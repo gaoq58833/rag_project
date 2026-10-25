@@ -41,7 +41,12 @@ class Settings:
 
     # RAG
     retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", "10"))
-    rerank_top_n: int = int(os.getenv("RERANK_TOP_N", "5"))
+    rerank_top_n: int = int(os.getenv("RERANK_TOP_N", "3"))
+
+    # JWT 鉴权
+    jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production")
+    jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
+    jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 默认 24 小时
 
 
 settings = Settings()

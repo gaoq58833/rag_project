@@ -46,12 +46,13 @@ class LLMClient:
             )
         return self._chat_client
 
-    def chat(self, messages: List[dict], temperature: float = 0.7) -> str:
+    def chat(self, messages: List[dict], temperature: float = 0.2, max_tokens: int = 2048) -> str:
         """对话补全，返回模型输出文本"""
         resp = self.chat_client.chat.completions.create(
             model=settings.llm_model,
             messages=messages,
             temperature=temperature,
+            max_tokens=max_tokens,
         )
         return resp.choices[0].message.content or ""
 

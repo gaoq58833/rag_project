@@ -22,6 +22,8 @@ dependencies = [
   "qdrant-client>=1.13.0",
   "python-dotenv>=1.0.0",
   "psycopg2-binary>=2.9.9",
+  "python-jose[cryptography]>=3.3.0",
+  "bcrypt>=4.0.0",
 ]
 
 [tool.uv.sources]

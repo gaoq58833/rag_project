@@ -99,3 +99,25 @@ class ChunkRepository:
     @staticmethod
     def delete_by_document_id(document_id: str) -> int:
         return db.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
+
+
+class UserRepository:
+    """用户表操作"""
+
+    @staticmethod
+    def create(username: str, password_hash: str, role: str = "user") -> str:
+        """创建用户，返回 user_id"""
+        user_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO users (id, username, password_hash, role) VALUES (%s, %s, %s, %s)",
+            (user_id, username, password_hash, role),
+        )
+        return user_id
+
+    @staticmethod
+    def get_by_username(username: str) -> Optional[Dict[str, Any]]:
+        return db.query_one("SELECT * FROM users WHERE username = %s", (username,))
+
+    @staticmethod
+    def get_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+        return db.query_one("SELECT * FROM users WHERE id = %s", (user_id,))
