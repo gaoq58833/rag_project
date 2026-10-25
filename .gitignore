@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 解析/分块产物（可由测试脚本重新生成）
+data/
+
+# 评测脚本的中间产物（保留 指标记录.md 这个人工整理的记录）
+量化/table_details.json
+量化/解析输出.md
+
+# 系统与临时文件
+.DS_Store
+*.log
+tmp/
+
