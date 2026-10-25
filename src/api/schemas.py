@@ -47,3 +47,36 @@ class ChunkResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     error: Optional[str] = None
+
+
+# ===== RAG 相关 =====
+
+class IngestResponse(BaseModel):
+    filename: str
+    chunk_count: int
+    stored_count: int
+
+
+class RetrievedChunk(BaseModel):
+    content: str
+    section: Optional[str] = None
+    type: str = "text"
+    images: Optional[List[str]] = None
+    score: float
+    filename: str
+    index: int
+
+
+class RetrieveResponse(BaseModel):
+    query: str
+    results: List[RetrievedChunk]
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: List[RetrievedChunk]
+
+
+class ChatRequest(BaseModel):
+    query: str
+    use_rerank: bool = True

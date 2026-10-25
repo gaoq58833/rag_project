@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# 项目数据与测试产物
+data/
+量化/
+tests/
+test_file/
+
+# Git / IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# 文档
+*.md
+!README.md
+
+# 其他
+*.log
+*.tmp
+.DS_Store

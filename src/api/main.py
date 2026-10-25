@@ -12,17 +12,29 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from src.api.schemas import (
+    ChatRequest,
     ChunkResponse,
     FormatsResponse,
     HealthResponse,
+    IngestResponse,
     ParseResponse,
+    RetrieveResponse,
 )
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, supported_extensions
+from src.rag import chat as rag_chat, ingest_file, retrieve as rag_retrieve
+from src.db import db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 启动时自动建表（PostgreSQL）
+    try:
+        db.init_schema()
+        print("[startup] PostgreSQL 表结构已初始化")
+    except Exception as e:
+        print(f"[startup] PostgreSQL 建表失败（请检查数据库连接）：{e}")
+
     # 启动时预热 PDFParser（加载 docling 模型），避免首次请求过慢
     try:
         get_parser("warmup.pdf")
@@ -54,7 +66,7 @@ async def root():
         "name": "RAG 文档解析 API",
         "version": "0.1.0",
         "docs": "/docs",
-        "endpoints": ["/health", "/formats", "/parse", "/chunk"],
+        "endpoints": ["/health", "/formats", "/parse", "/chunk", "/ingest", "/retrieve", "/chat"],
     }
 
 
@@ -142,6 +154,57 @@ async def chunk_file(
         chunk_count=len(chunks),
         chunks=chunks,
     )
+
+
+# ===== RAG 接口 =====
+
+@app.post(
+    "/ingest",
+    response_model=IngestResponse,
+    summary="入库：上传文档 → 解析分块 → 向量化 → 存入 Qdrant",
+)
+async def ingest(file: UploadFile = File(...)):
+    """上传文档，自动解析、分块、向量化并写入向量库。"""
+    filename = file.filename or "unnamed"
+    file_bytes = await file.read()
+
+    try:
+        result = ingest_file(file_bytes, filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"入库失败：{e}")
+
+    return IngestResponse(**result)
+
+
+@app.post(
+    "/retrieve",
+    response_model=RetrieveResponse,
+    summary="检索：query → 向量召回 → 重排 → 返回相关块",
+)
+async def retrieve(query: str, top_k: Optional[int] = None, use_rerank: bool = True):
+    """根据 query 检索知识库中的相关片段。"""
+    try:
+        results = rag_retrieve(query, top_k=top_k, use_rerank=use_rerank)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"检索失败：{e}")
+
+    return RetrieveResponse(query=query, results=results)
+
+
+@app.post(
+    "/chat",
+    summary="问答：检索 → 构造上下文 → LLM 生成回答",
+)
+async def chat(request: ChatRequest):
+    """基于知识库的问答，返回答案和引用来源。"""
+    try:
+        result = rag_chat(request.query, use_rerank=request.use_rerank)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"问答失败：{e}")
+
+    return result
 
 
 @app.exception_handler(HTTPException)

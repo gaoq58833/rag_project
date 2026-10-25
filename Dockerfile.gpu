@@ -1,0 +1,51 @@
+# RAG 文档解析服务 —— GPU 版
+# 需要宿主机：NVIDIA 驱动 + nvidia-container-toolkit
+# 运行：docker run --gpus all -p 8000:8000 rag-project:gpu
+
+# ---------- 构建阶段：安装依赖 ----------
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 AS builder
+
+# 安装 Python 和 uv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 \
+        python3.12-venv \
+        python3-pip \
+        curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh
+
+ENV PATH="/root/.local/bin:$PATH" \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1
+
+WORKDIR /app
+
+# 保留 pyproject 里的 CUDA 版 torch（不重定向索引）
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project
+
+# ---------- 运行阶段 ----------
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app/.venv /app/.venv
+COPY src ./src
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

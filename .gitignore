@@ -21,3 +21,6 @@ data/
 *.log
 tmp/
 
+# 环境变量（含 API Key，不要提交）
+.env
+
