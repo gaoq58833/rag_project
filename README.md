@@ -305,7 +305,7 @@ chunks = chunker.split(markdown_text)
 
 ```
 query → embed → Qdrant.query_points(top_k=10) → 拿到 qdrant_point_id 列表
-      → 回 PostgreSQL 查完整 chunk → bge-reranker 重排(top_n=5) → 返回
+      → 回 PostgreSQL 查完整 chunk → bge-reranker 重排(top_n=3) → 返回
 ```
 
 ### 问答（chat）
@@ -574,7 +574,7 @@ Dockerfile.gpu        GPU 版镜像构建
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `RETRIEVAL_TOP_K` | `10` | 向量召回数量 |
-| `RERANK_TOP_N` | `5` | 重排后保留数量 |
+| `RERANK_TOP_N` | `3` | 重排后保留数量 |
 
 ### 其他
 
