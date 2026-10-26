@@ -676,6 +676,14 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `PG_USER`     | `postgres`  | 用户名   |
 | `PG_PASSWORD` | —           | 密码     |
 
+### 分块参数
+
+| 变量             | 默认值 | 说明               |
+| ---------------- | ------ | ------------------ |
+| `CHUNK_MAX_SIZE` | `1000` | 单个分块最大字符数 |
+| `CHUNK_MIN_SIZE` | `100`  | 单个分块最小字符数 |
+| `CHUNK_OVERLAP`  | `200`  | 相邻分块重叠字符数 |
+
 ### RAG 检索参数
 
 | 变量                  | 默认值 | 说明                        |
@@ -683,8 +691,26 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `RETRIEVAL_TOP_K`     | `10`   | 向量召回数量                |
 | `RERANK_TOP_N`        | `3`    | 重排后保留数量              |
 | `CHAT_HISTORY_ROUNDS` | `5`    | 多轮对话保留最近 N 轮上下文 |
-| `CHAT_CACHE_TTL`      | `600`  | 问答缓存过期时间（秒）      |
-| `CHAT_CACHE_MAXSIZE`  | `500`  | 问答缓存最大条目数（LRU）   |
+| `LLM_TEMPERATURE`     | `0.2`  | 生成温度，越低越确定        |
+| `LLM_MAX_TOKENS`      | `2048` | 单次回答最大生成 token 数   |
+
+### 问答缓存
+
+| 变量                         | 默认值 | 说明                          |
+| ---------------------------- | ------ | ----------------------------- |
+| `CHAT_CACHE_TTL`             | `600`  | 缓存过期时间（秒）            |
+| `CHAT_CACHE_MAXSIZE`         | `500`  | 缓存最大条目数（LRU 淘汰）    |
+| `CHAT_CACHE_HISTORY_SIG_LEN` | `20`   | 缓存键中每条历史消息取前 N 字 |
+
+### Qdrant 索引参数
+
+> ⚠️ 仅在**首次创建集合**时生效，修改后需删除集合重建。
+
+| 变量                         | 默认值  | 说明                         |
+| ---------------------------- | ------- | ---------------------------- |
+| `QDRANT_HNSW_M`              | `16`    | HNSW 每层连接数              |
+| `QDRANT_HNSW_EF_CONSTRUCT`   | `100`   | 构建时搜索邻居数量           |
+| `QDRANT_FULL_SCAN_THRESHOLD` | `10000` | 低于此数量走精确扫描不走索引 |
 
 ### JWT 鉴权
 

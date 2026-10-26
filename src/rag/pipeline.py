@@ -21,9 +21,9 @@ from src.vectorstore import vector_store
 
 DEFAULT_CHUNKER = TextChunker(
     strategy=ChunkStrategy.PARAGRAPH,
-    max_chunk_size=1000,
-    min_chunk_size=100,
-    chunk_overlap=200,
+    max_chunk_size=settings.chunk_max_size,
+    min_chunk_size=settings.chunk_min_size,
+    chunk_overlap=settings.chunk_overlap,
 )
 
 # 系统提示词
@@ -279,7 +279,7 @@ class _TTLCache:
         return self.get(key) is not None
 
 
-_chat_cache = _TTLCache(maxsize=500, ttl=600)
+_chat_cache = _TTLCache(maxsize=settings.chat_cache_maxsize, ttl=settings.chat_cache_ttl)
 
 
 def clear_chat_cache():
@@ -289,7 +289,7 @@ def clear_chat_cache():
 
 def _chat_cache_key(query: str, user_id: str, history: List[dict], use_rerank: bool = True) -> str:
     """缓存键：用户 + 问题 + 最近历史摘要（多轮上下文不同则不命中）"""
-    history_sig = "|".join(f"{m['role']}:{m['content'][:50]}" for m in history)
+    history_sig = "|".join(f"{m['role']}:{m['content'][:settings.chat_cache_history_sig_len]}" for m in history)
     return hashlib.sha256(f"{user_id}|{query}|{use_rerank}|{history_sig}".encode()).hexdigest()
 
 

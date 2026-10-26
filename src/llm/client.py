@@ -46,8 +46,10 @@ class LLMClient:
             )
         return self._chat_client
 
-    def chat(self, messages: List[dict], temperature: float = 0.2, max_tokens: int = 2048) -> str:
+    def chat(self, messages: List[dict], temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> str:
         """对话补全，返回模型输出文本"""
+        temperature = settings.llm_temperature if temperature is None else temperature
+        max_tokens = settings.llm_max_tokens if max_tokens is None else max_tokens
         resp = self.chat_client.chat.completions.create(
             model=settings.llm_model,
             messages=messages,
@@ -56,8 +58,10 @@ class LLMClient:
         )
         return resp.choices[0].message.content or ""
 
-    def chat_stream(self, messages: List[dict], temperature: float = 0.2, max_tokens: int = 2048):
+    def chat_stream(self, messages: List[dict], temperature: Optional[float] = None, max_tokens: Optional[int] = None):
         """流式对话补全，逐 token yield 文本片段"""
+        temperature = settings.llm_temperature if temperature is None else temperature
+        max_tokens = settings.llm_max_tokens if max_tokens is None else max_tokens
         stream = self.chat_client.chat.completions.create(
             model=settings.llm_model,
             messages=messages,

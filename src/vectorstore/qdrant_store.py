@@ -44,9 +44,9 @@ class VectorStore:
                 ),
                 # HNSW 索引参数
                 hnsw_config=models.HnswConfigDiff(
-                    m=16,
-                    ef_construct=100,
-                    full_scan_threshold=10000,
+                    m=settings.qdrant_hnsw_m,
+                    ef_construct=settings.qdrant_hnsw_ef_construct,
+                    full_scan_threshold=settings.qdrant_full_scan_threshold,
                 ),
             )
         self._collection_ready = True
