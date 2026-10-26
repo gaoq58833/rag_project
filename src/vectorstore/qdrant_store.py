@@ -99,6 +99,16 @@ class VectorStore:
             ),
         )
 
+    def delete_by_ids(self, point_ids: List[str]):
+        """按 Qdrant point id 批量删除向量"""
+        if not point_ids:
+            return
+        self._ensure_collection()
+        self._get_client().delete(
+            collection_name=self.collection,
+            points_selector=models.PointIdsList(points=point_ids),
+        )
+
     def count(self) -> int:
         """返回集合中的向量数"""
         self._ensure_collection()

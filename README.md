@@ -16,7 +16,7 @@
 - **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Markdown、HTML、TXT 一站式覆盖
 - **智能分块**：段落优先的级联降级策略（段落 → 句子 → 字符），表格原子化、图片归属、章节路径溯源
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
-- **RAG 全链路**：入库（解析→分块→向量化）→ 向量召回（Qdrant HNSW）→ 重排（bge-reranker-v2-m3）→ LLM 问答（带引用来源）
+- **RAG 全链路**：入库（解析→分块→向量化）→ 向量召回（Qdrant HNSW）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
 - **业务库**：完整 chunk 数据入 PostgreSQL（JSONB），Qdrant 只存向量 + 最小 payload，检索后回查 PG
 - **REST API**：FastAPI + uvicorn，`/ingest`、`/retrieve`、`/chat` 等，Swagger 文档自动生成
 - **量化评测**：百分制打分（完整性 / 块大小 / 表格 / 粒度 / 可追溯），结果可复现
@@ -93,9 +93,9 @@ cp .env.example .env
 | ----------------- | ----------------------------------------------------------------------- |
 | `LLM_API_KEY`     | 你的 API 密钥（Embedding/LLM/Rerank 共用或分别填）                      |
 | `LLM_BASE_URL`    | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `EMBEDDING_MODEL` | 向量化模型，默认 `text-embedding-flash`（1024 维）                      |
+| `EMBEDDING_MODEL` | 向量化模型，默认 `qwen3.7-text-embedding`（1024 维）                    |
 | `LLM_MODEL`       | 问答模型，默认 `qwen3.7-plus`                                           |
-| `RERANKER_MODEL`  | 重排模型，默认 `bge-reranker-v2-m3`                                     |
+| `RERANKER_MODEL`  | 重排模型，默认 `qwen3-rerank`                                           |
 | `PG_*`            | PostgreSQL 连接信息（host/port/db/user/password）                       |
 | `QDRANT_PATH`     | 本地模式路径，默认 `./data/qdrant`（无需启 Qdrant 服务）                |
 
@@ -317,7 +317,7 @@ chunks = chunker.split(markdown_text)
 
 ```
 query → embed → Qdrant.query_points(top_k=10) → 拿到 qdrant_point_id 列表
-      → 回 PostgreSQL 查完整 chunk → bge-reranker 重排(top_n=3) → 返回
+      → 回 PostgreSQL 查完整 chunk → qwen3-rerank 重排(top_n=3) → 返回
 ```
 
 ### 问答（chat）
@@ -351,25 +351,30 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
 ### 接口列表
 
-| 方法 | 路径             | 鉴权 | 说明                                                       |
-| ---- | ---------------- | ---- | ---------------------------------------------------------- |
-| GET  | `/health`        | 否   | 健康检查                                                   |
-| GET  | `/formats`       | 否   | 返回支持的扩展名列表                                       |
-| POST | `/parse`         | 否   | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块） |
-| POST | `/chunk`         | 否   | 上传文件 → 解析并分块，返回 `chunks` 列表                  |
-| POST | `/auth/register` | 否   | 用户注册，返回 JWT token                                   |
-| POST | `/auth/login`    | 否   | 用户名密码登录，返回 JWT token                             |
-| GET  | `/auth/me`       | 是   | 获取当前登录用户信息                                       |
-| POST | `/ingest`        | 是   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant    |
-| POST | `/retrieve`      | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）           |
-| POST | `/chat`          | 是   | `query` → 检索 → LLM 生成回答 + 引用来源                   |
+| 方法   | 路径                           | 鉴权 | 说明                                                       |
+| ------ | ------------------------------ | ---- | ---------------------------------------------------------- |
+| GET    | `/health`                      | 否   | 健康检查                                                   |
+| GET    | `/formats`                     | 否   | 返回支持的扩展名列表                                       |
+| POST   | `/parse`                       | 否   | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块） |
+| POST   | `/chunk`                       | 否   | 上传文件 → 解析并分块，返回 `chunks` 列表                  |
+| POST   | `/auth/register`               | 否   | 用户注册，返回 JWT token                                   |
+| POST   | `/auth/login`                  | 否   | 用户名密码登录，返回 JWT token                             |
+| GET    | `/auth/me`                     | 是   | 获取当前登录用户信息                                       |
+| POST   | `/ingest`                      | 是   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant    |
+| POST   | `/retrieve`                    | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）           |
+| POST   | `/chat`                        | 是   | `query` → 检索 → LLM 生成回答 + 引用来源，支持多轮对话     |
+| GET    | `/conversations`               | 是   | 获取当前用户的对话列表                                     |
+| GET    | `/conversations/{id}/messages` | 是   | 获取指定对话的全部消息                                     |
+| DELETE | `/conversations/{id}`          | 是   | 删除对话及其全部消息                                       |
 
 > 鉴权接口需在请求头携带 `Authorization: Bearer <token>`。
+> `/chat` 多轮对话：首次调用不传 `conversation_id` 会新建对话并返回 ID；后续调用传入该 ID 即可带入最近 5 轮上下文（`CHAT_HISTORY_ROUNDS` 可调）。
 > LLM 生成参数：`temperature=0.2`、`max_tokens=2048`。
 > 已启用 CORS 跨域（`allow_origins="*"`），前端可直接调用；生产环境建议改为具体域名。
 
 `/chunk` 支持查询参数覆盖分块大小：`?max_chunk_size=800&min_chunk_size=100&chunk_overlap=150`。
 `/retrieve` 支持 `?query=xxx&top_k=10&use_rerank=true`。
+`/chat` 请求体：`{"query": "...", "use_rerank": true, "conversation_id": "可选"}`。
 
 ### 调用示例
 
@@ -404,11 +409,22 @@ r = requests.post(f"{BASE}/retrieve", params={"query": "循环神经网络原理
 for c in r.json()["results"]:
     print(f"[{c['score']:.3f}] {c['section']} | {c['content'][:60]}")
 
-# 问答（需鉴权）
+# 问答（需鉴权）—— 首次对话不传 conversation_id，自动创建
 r = requests.post(f"{BASE}/chat", json={"query": "RNN 为什么能处理序列？", "use_rerank": True}, headers=headers)
-print(r.json()["answer"])
-for s in r.json()["sources"]:
+data = r.json()
+print(data["answer"])
+cid = data["conversation_id"]  # 保存对话 ID 用于续聊
+for s in data["sources"]:
     print(f"  - 来源: {s['filename']} > {s['section']}")
+
+# 多轮对话 —— 传入 conversation_id，自动带入最近 5 轮上下文
+r = requests.post(f"{BASE}/chat", json={"query": "能再简单点说吗？", "conversation_id": cid}, headers=headers)
+print(r.json()["answer"])
+
+# 查看对话历史
+r = requests.get(f"{BASE}/conversations/{cid}/messages", headers=headers)
+for m in r.json()["messages"]:
+    print(f"[{m['role']}] {m['content'][:80]}")
 ```
 
 ```bash
@@ -599,16 +615,16 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 
 ### LLM / Embedding / Rerank（OpenAI 兼容格式）
 
-| 变量                 | 默认值                 | 说明                                                                                    |
-| -------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
-| `LLM_API_KEY`        | —                      | API 密钥（必填）。若三个服务用不同 key，分别填 `EMBEDDING_API_KEY` / `RERANKER_API_KEY` |
-| `LLM_BASE_URL`       | —                      | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1`                 |
-| `EMBEDDING_BASE_URL` | = LLM_BASE_URL         | Embedding 服务端点                                                                      |
-| `RERANKER_BASE_URL`  | = LLM_BASE_URL         | Rerank 服务端点                                                                         |
-| `EMBEDDING_MODEL`    | `text-embedding-flash` | 向量化模型（1024 维）                                                                   |
-| `EMBEDDING_DIM`      | `1024`                 | 向量维度，必须与 embedding 模型输出一致，换模型时同步修改并重建向量库                   |
-| `LLM_MODEL`          | `qwen3.7-plus`         | 问答模型                                                                                |
-| `RERANKER_MODEL`     | `bge-reranker-v2-m3`   | 重排模型                                                                                |
+| 变量                 | 默认值                   | 说明                                                                                    |
+| -------------------- | ------------------------ | --------------------------------------------------------------------------------------- |
+| `LLM_API_KEY`        | —                        | API 密钥（必填）。若三个服务用不同 key，分别填 `EMBEDDING_API_KEY` / `RERANKER_API_KEY` |
+| `LLM_BASE_URL`       | —                        | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1`                 |
+| `EMBEDDING_BASE_URL` | = LLM_BASE_URL           | Embedding 服务端点                                                                      |
+| `RERANKER_BASE_URL`  | = LLM_BASE_URL           | Rerank 服务端点                                                                         |
+| `EMBEDDING_MODEL`    | `qwen3.7-text-embedding` | 向量化模型（1024 维）                                                                   |
+| `EMBEDDING_DIM`      | `1024`                   | 向量维度，必须与 embedding 模型输出一致，换模型时同步修改并重建向量库                   |
+| `LLM_MODEL`          | `qwen3.7-plus`           | 问答模型                                                                                |
+| `RERANKER_MODEL`     | `qwen3-rerank`           | 重排模型                                                                                |
 
 ### 向量数据库（Qdrant）
 
@@ -631,10 +647,11 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 
 ### RAG 检索参数
 
-| 变量              | 默认值 | 说明           |
-| ----------------- | ------ | -------------- |
-| `RETRIEVAL_TOP_K` | `10`   | 向量召回数量   |
-| `RERANK_TOP_N`    | `3`    | 重排后保留数量 |
+| 变量                  | 默认值 | 说明                        |
+| --------------------- | ------ | --------------------------- |
+| `RETRIEVAL_TOP_K`     | `10`   | 向量召回数量                |
+| `RERANK_TOP_N`        | `3`    | 重排后保留数量              |
+| `CHAT_HISTORY_ROUNDS` | `5`    | 多轮对话保留最近 N 轮上下文 |
 
 ### JWT 鉴权
 

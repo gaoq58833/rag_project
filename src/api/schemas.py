@@ -75,17 +75,19 @@ class RetrieveResponse(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: List[RetrievedChunk]
+    conversation_id: str
 
 
 class ChatRequest(BaseModel):
     query: str
     use_rerank: bool = True
+    conversation_id: Optional[str] = None  # 不传则新建对话，传则追加到该对话
 
 
 # ===== 鉴权相关 =====
 
 class RegisterRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
+    username: str = Field(..., min_length=1, max_length=15)
     password: str = Field(..., min_length=6, max_length=128)
 
 
@@ -106,3 +108,29 @@ class UserInfo(BaseModel):
     id: str
     username: str
     role: str
+
+
+# ===== 多轮对话相关 =====
+
+class Conversation(BaseModel):
+    id: str
+    title: str
+    created_at: Any
+    updated_at: Any
+
+
+class Message(BaseModel):
+    id: str
+    conversation_id: str
+    role: str
+    content: str
+    sources: Optional[List[Any]] = None
+    created_at: Any
+
+
+class ConversationListResponse(BaseModel):
+    conversations: List[Conversation]
+
+
+class MessageListResponse(BaseModel):
+    messages: List[Message]

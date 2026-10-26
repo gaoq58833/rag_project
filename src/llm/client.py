@@ -1,6 +1,7 @@
 """LLM 客户端：embedding / chat / rerank，统一 OpenAI 兼容格式"""
 from typing import List, Optional
 
+import httpx
 from openai import OpenAI
 
 from src.config import settings
@@ -12,7 +13,6 @@ class LLMClient:
     def __init__(self):
         self._embedding_client: Optional[OpenAI] = None
         self._chat_client: Optional[OpenAI] = None
-        self._rerank_client: Optional[OpenAI] = None
 
     # ---------- Embedding ----------
     @property
@@ -56,32 +56,32 @@ class LLMClient:
         )
         return resp.choices[0].message.content or ""
 
-    # ---------- Rerank ----------
-    @property
-    def rerank_client(self) -> OpenAI:
-        if self._rerank_client is None:
-            self._rerank_client = OpenAI(
-                api_key=settings.reranker_api_key,
-                base_url=settings.reranker_base_url,
-            )
-        return self._rerank_client
-
     def rerank(self, query: str, documents: List[str], top_n: Optional[int] = None) -> List[int]:
         """重排，返回排序后的文档索引列表（分数从高到低）
 
-        部分供应商的 rerank 接口兼容 OpenAI 格式，通过 /rerank 端点调用。
+        使用 DashScope 原生 rerank API（/services/rerank/text-rerank/text-rerank）。
         """
         top_n = top_n or settings.rerank_top_n
-        resp = self.rerank_client.post(
-            "/rerank",
-            body={
-                "model": settings.reranker_model,
+        url = settings.reranker_base_url.rstrip("/") + "/services/rerank/text-rerank/text-rerank"
+        headers = {
+            "Authorization": f"Bearer {settings.reranker_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.reranker_model,
+            "input": {
                 "query": query,
                 "documents": documents,
-                "top_n": top_n,
             },
-        )
-        results = resp.parse()["results"]
+            "parameters": {
+                "top_n": top_n,
+                "return_documents": False,
+            },
+        }
+        with httpx.Client(timeout=30) as http:
+            resp = http.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            results = resp.json()["output"]["results"]
         return [r["index"] for r in results]
 
 

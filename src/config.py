@@ -43,6 +43,7 @@ class Settings:
     # RAG
     retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", "10"))
     rerank_top_n: int = int(os.getenv("RERANK_TOP_N", "3"))
+    chat_history_rounds: int = int(os.getenv("CHAT_HISTORY_ROUNDS", "5"))  # 多轮对话保留最近 N 轮
 
     # JWT 鉴权
     jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production")

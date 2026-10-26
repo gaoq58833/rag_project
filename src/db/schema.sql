@@ -48,3 +48,27 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
+
+-- 对话表：每个用户的一段对话
+CREATE TABLE IF NOT EXISTS conversations (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title         TEXT NOT NULL DEFAULT '新对话',   -- 首条消息自动生成标题
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations (user_id, updated_at DESC);
+
+-- 消息表：对话中的每一条消息（user / assistant）
+CREATE TABLE IF NOT EXISTS messages (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL,                   -- 'user' | 'assistant'
+    content         TEXT NOT NULL,
+    sources         JSONB NOT NULL DEFAULT '[]'::jsonb,  -- 仅 assistant 有，引用来源
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_time
+    ON messages (conversation_id, created_at ASC);

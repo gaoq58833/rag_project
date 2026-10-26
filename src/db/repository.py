@@ -37,6 +37,13 @@ class DocumentRepository:
         )
 
     @staticmethod
+    def get_by_id(document_id: str) -> Optional[Dict[str, Any]]:
+        return db.query_one(
+            "SELECT * FROM documents WHERE id = %s",
+            (document_id,),
+        )
+
+    @staticmethod
     def delete_by_filename(filename: str) -> int:
         """按文件名删除文档及其所有 chunks（ON DELETE CASCADE 自动删 chunks）"""
         return db.execute("DELETE FROM documents WHERE filename = %s", (filename,))
@@ -121,3 +128,85 @@ class UserRepository:
     @staticmethod
     def get_by_id(user_id: str) -> Optional[Dict[str, Any]]:
         return db.query_one("SELECT * FROM users WHERE id = %s", (user_id,))
+
+
+class ConversationRepository:
+    """对话表操作"""
+
+    @staticmethod
+    def create(user_id: str, title: str = "新对话") -> str:
+        conv_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO conversations (id, user_id, title) VALUES (%s, %s, %s)",
+            (conv_id, user_id, title),
+        )
+        return conv_id
+
+    @staticmethod
+    def get_by_id(conv_id: str) -> Optional[Dict[str, Any]]:
+        return db.query_one("SELECT * FROM conversations WHERE id = %s", (conv_id,))
+
+    @staticmethod
+    def list_by_user(user_id: str) -> List[Dict[str, Any]]:
+        return db.query_all(
+            "SELECT * FROM conversations WHERE user_id = %s ORDER BY updated_at DESC",
+            (user_id,),
+        )
+
+    @staticmethod
+    def update_title(conv_id: str, title: str) -> int:
+        return db.execute(
+            "UPDATE conversations SET title = %s, updated_at = now() WHERE id = %s",
+            (title, conv_id),
+        )
+
+    @staticmethod
+    def touch(conv_id: str) -> int:
+        return db.execute(
+            "UPDATE conversations SET updated_at = now() WHERE id = %s", (conv_id,)
+        )
+
+    @staticmethod
+    def delete(conv_id: str) -> int:
+        return db.execute("DELETE FROM conversations WHERE id = %s", (conv_id,))
+
+
+class MessageRepository:
+    """消息表操作"""
+
+    @staticmethod
+    def create(
+        conversation_id: str,
+        role: str,
+        content: str,
+        sources: Optional[List[Any]] = None,
+    ) -> str:
+        msg_id = str(uuid.uuid4())
+        db.execute(
+            """INSERT INTO messages (id, conversation_id, role, content, sources)
+               VALUES (%s, %s, %s, %s, %s::jsonb)""",
+            (msg_id, conversation_id, role, content, json.dumps(sources or [], ensure_ascii=False)),
+        )
+        return msg_id
+
+    @staticmethod
+    def get_recent(conversation_id: str, rounds: int) -> List[Dict[str, Any]]:
+        """取最近 rounds 轮（即 2*rounds 条消息），按时间升序返回"""
+        limit = rounds * 2
+        rows = db.query_all(
+            """SELECT * FROM messages
+               WHERE conversation_id = %s
+               ORDER BY created_at DESC
+               LIMIT %s""",
+            (conversation_id, limit),
+        )
+        # 倒序取出来的，再翻成升序
+        rows.reverse()
+        return rows
+
+    @staticmethod
+    def list_by_conversation(conversation_id: str) -> List[Dict[str, Any]]:
+        return db.query_all(
+            "SELECT * FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
+            (conversation_id,),
+        )

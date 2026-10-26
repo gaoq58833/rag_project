@@ -6,20 +6,26 @@
   python -m src.api.main
 """
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.schemas import (
     AuthResponse,
     ChatRequest,
     ChunkResponse,
+    Conversation,
+    ConversationListResponse,
     FormatsResponse,
     HealthResponse,
     IngestResponse,
     LoginRequest,
+    Message,
+    MessageListResponse,
     ParseResponse,
     RegisterRequest,
     RetrieveResponse,
@@ -28,10 +34,17 @@ from src.api.schemas import (
 from src.auth import create_access_token, hash_password, verify_password
 from src.auth.deps import get_current_user
 from src.db import db
-from src.db.repository import UserRepository
+from src.db.repository import (
+    ChunkRepository,
+    ConversationRepository,
+    DocumentRepository,
+    MessageRepository,
+    UserRepository,
+)
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, supported_extensions
 from src.rag import chat as rag_chat, ingest_file, retrieve as rag_retrieve
+from src.vectorstore import vector_store
 
 
 @asynccontextmanager
@@ -77,17 +90,22 @@ DEFAULT_CHUNKER = TextChunker(
 )
 
 
-@app.get("/", summary="根路由")
+# 静态文件目录（前端页面）
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/", include_in_schema=False)
 async def root():
+    """根路径返回前端 index.html"""
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
     return {
         "name": "RAG 文档解析 API",
         "version": "0.1.0",
         "docs": "/docs",
-        "endpoints": [
-            "/health", "/formats", "/parse", "/chunk",
-            "/auth/register", "/auth/login", "/auth/me",
-            "/ingest", "/retrieve", "/chat",
-        ],
     }
 
 
@@ -256,6 +274,46 @@ async def ingest(file: UploadFile = File(...), current_user: dict = Depends(get_
     return IngestResponse(**result)
 
 
+@app.get("/documents", summary="获取已入库文档列表")
+async def list_documents(current_user: dict = Depends(get_current_user)):
+    """返回所有已入库文档（文件名、块数、上传时间）。需登录。"""
+    rows = DocumentRepository.list_all()
+    return {
+        "documents": [
+            {
+                "id": r["id"],
+                "filename": r["filename"],
+                "file_ext": r["file_ext"],
+                "chunk_count": r["chunk_count"],
+                "total_pages": r["total_pages"],
+                "uploaded_at": r["uploaded_at"].isoformat() if r.get("uploaded_at") else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.delete("/documents/{document_id}", summary="删除文档及其向量")
+async def delete_document(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """删除文档：同时清除 Qdrant 向量和 PostgreSQL 记录（chunks 级联删除）。需登录。"""
+    doc = DocumentRepository.get_by_id(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    # 取出该文档所有 chunk 的 qdrant_point_id，从向量库删除
+    chunks = ChunkRepository.get_by_document_id(document_id)
+    point_ids = [c["qdrant_point_id"] for c in chunks if c.get("qdrant_point_id")]
+    if point_ids:
+        vector_store.delete_by_ids(point_ids)
+
+    # PG 删除文档（chunks 表 ON DELETE CASCADE 自动清理）
+    db.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+    return {"ok": True, "deleted_chunks": len(chunks)}
+
+
 @app.post(
     "/retrieve",
     response_model=RetrieveResponse,
@@ -278,16 +336,72 @@ async def retrieve(
 
 @app.post(
     "/chat",
-    summary="问答：检索 → 构造上下文 → LLM 生成回答",
+    summary="问答：检索 → 构造上下文（含多轮历史）→ LLM 生成回答",
 )
 async def chat(request: ChatRequest, current_user: dict = Depends(get_current_user)):
-    """基于知识库的问答，返回答案和引用来源。需登录。"""
+    """基于知识库的问答，自动保存多轮对话历史。
+
+    - 不传 `conversation_id` 则新建对话
+    - 传 `conversation_id` 则追加到已有对话，并带入最近 N 轮上下文
+    """
     try:
-        result = rag_chat(request.query, use_rerank=request.use_rerank)
+        result = rag_chat(
+            query=request.query,
+            user_id=current_user["id"],
+            conversation_id=request.conversation_id,
+            use_rerank=request.use_rerank,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"问答失败：{e}")
 
     return result
+
+
+# ===== 多轮对话接口 =====
+
+@app.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    summary="获取当前用户的对话列表",
+)
+async def list_conversations(current_user: dict = Depends(get_current_user)):
+    rows = ConversationRepository.list_by_user(current_user["id"])
+    return ConversationListResponse(
+        conversations=[Conversation(**r) for r in rows]
+    )
+
+
+@app.get(
+    "/conversations/{conversation_id}/messages",
+    response_model=MessageListResponse,
+    summary="获取指定对话的全部消息",
+)
+async def list_messages(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    conv = ConversationRepository.get_by_id(conversation_id)
+    if conv is None or str(conv["user_id"]) != current_user["id"]:
+        raise HTTPException(status_code=404, detail="对话不存在或无权访问")
+    rows = MessageRepository.list_by_conversation(conversation_id)
+    return MessageListResponse(messages=[Message(**r) for r in rows])
+
+
+@app.delete(
+    "/conversations/{conversation_id}",
+    summary="删除对话及其全部消息",
+)
+async def delete_conversation(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    conv = ConversationRepository.get_by_id(conversation_id)
+    if conv is None or str(conv["user_id"]) != current_user["id"]:
+        raise HTTPException(status_code=404, detail="对话不存在或无权访问")
+    ConversationRepository.delete(conversation_id)
+    return {"ok": True}
 
 
 @app.exception_handler(HTTPException)
