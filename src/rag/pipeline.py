@@ -1,6 +1,10 @@
 """RAG 管线：入库（解析→分块→向量化→存 PG+Qdrant）、检索（向量召回→重排→回查 PG）、问答"""
+import hashlib
+import time
 import uuid
-from typing import List, Optional
+from collections import OrderedDict
+from threading import Lock
+from typing import Any, Dict, List, Optional
 
 from src.config import settings
 from src.db.repository import (
@@ -71,28 +75,73 @@ RNN 通过隐藏状态在时间步之间传递来处理序列。它逐个读取�
 """
 
 
-def ingest_file(file_bytes: bytes, filename: str) -> dict:
+def ingest_file(file_bytes: bytes, filename: str, user_id: Optional[str] = None) -> dict:
     """入库：解析 → 分块 → 向量化 → 同时写入 PostgreSQL 和 Qdrant
+
+    去重策略：
+      - 计算文件内容 SHA-256，若已存在相同 hash 的文档，直接复用其 chunks 和 Qdrant 向量，
+        跳过解析/分块/向量化，节省 API 调用。
 
     数据分工：
       - PostgreSQL：完整 chunk 数据（content/section/type/images 等）
       - Qdrant：向量 + 最小 payload（用于检索后回查 PG）
 
-    返回：{filename, chunk_count, stored_count}
+    返回：{filename, chunk_count, stored_count, reused: bool}
     """
-    # 1. 解析
+    # 0. 计算内容哈希
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+
+    # 1. 查是否已有相同内容的文档（去重复用）
+    existing = DocumentRepository.get_by_content_hash(content_hash)
+    file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if existing is not None:
+        # 复用已有文档的 chunks 和向量
+        existing_id = existing["id"]
+        existing_chunks = ChunkRepository.get_by_document_id(existing_id)
+
+        # 创建新 document 记录（指向同一批向量）
+        document_id = DocumentRepository.create(
+            filename=filename,
+            file_ext=file_ext,
+            total_pages=existing["total_pages"],
+            table_count=existing["table_count"],
+            chunk_count=len(existing_chunks),
+            raw_text=existing.get("raw_text"),
+            content_hash=content_hash,
+            user_id=user_id,
+        )
+
+        # 复制 chunk 行（新 document_id，同 qdrant_point_id + content）
+        reused_chunks = []
+        for c in existing_chunks:
+            reused_chunks.append({
+                "document_id": document_id,
+                "qdrant_point_id": str(c["qdrant_point_id"]),
+                "chunk_index": c["chunk_index"],
+                "content": c["content"],
+                "length": c["length"],
+                "chunk_type": c.get("chunk_type", "text"),
+                "section": c.get("section", ""),
+                "images": c.get("images", []),
+            })
+        ChunkRepository.bulk_insert(reused_chunks)
+
+        return {
+            "filename": filename,
+            "chunk_count": len(existing_chunks),
+            "stored_count": len(existing_chunks),
+            "reused": True,
+        }
+
+    # 2. 解析
     parser = get_parser(filename)
     result = parser.parse_from_bytes(file_bytes, filename)
 
-    # 2. 分块
+    # 3. 分块
     chunks = DEFAULT_CHUNKER.split(result.raw_text, tables=result.tables)
 
-    # 3. 先删同名旧文档（PG 级联删 chunks，Qdrant 按 filename 删），避免外键冲突
-    DocumentRepository.delete_by_filename(filename)
-    vector_store.delete_by_filename(filename)
-
     # 4. 写 PG documents 表，拿到 document_id
-    file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     document_id = DocumentRepository.create(
         filename=filename,
         file_ext=file_ext,
@@ -100,6 +149,8 @@ def ingest_file(file_bytes: bytes, filename: str) -> dict:
         table_count=result.table_count,
         chunk_count=len(chunks),
         raw_text=result.raw_text,
+        content_hash=content_hash,
+        user_id=user_id,
     )
 
     # 5. 向量化 content（只向量化正文）
@@ -138,6 +189,7 @@ def ingest_file(file_bytes: bytes, filename: str) -> dict:
         "filename": filename,
         "chunk_count": len(chunks),
         "stored_count": len(qdrant_ids),
+        "reused": False,
     }
 
 
@@ -189,36 +241,71 @@ def retrieve(query: str, top_k: Optional[int] = None, use_rerank: bool = True) -
     return results
 
 
-def chat(
-    query: str,
-    user_id: str,
-    conversation_id: Optional[str] = None,
-    use_rerank: bool = True,
-) -> dict:
-    """问答：检索 → 构造上下文（含多轮历史）→ LLM 生成 → 落库
+# 问答缓存：同用户同问题（含相同历史上下文）10 分钟内直接返回，跳过检索+LLM
+class _TTLCache:
+    """简易 TTL 缓存（纯标准库实现，线程安全，LRU 淘汰）"""
 
-    - 不传 conversation_id 时新建对话（标题取 query 前 30 字）
-    - 取最近 chat_history_rounds 轮历史作为多轮上下文
-    - user / assistant 消息都会写入 messages 表
+    def __init__(self, maxsize: int = 500, ttl: int = 600):
+        self.maxsize = maxsize
+        self.ttl = ttl
+        self._data: OrderedDict = OrderedDict()
+        self._lock = Lock()
 
-    返回：{answer, sources, conversation_id}
-    """
-    # 1. 已有对话：取历史；新对话：延迟到检索成功后再创建（避免留下空对话）
-    history = []
-    if conversation_id:
-        conv = ConversationRepository.get_by_id(conversation_id)
-        if conv is None or str(conv["user_id"]) != user_id:
-            raise ValueError("对话不存在或无权访问")
-        history = MessageRepository.get_recent(conversation_id, settings.chat_history_rounds)
+    def get(self, key: str) -> Optional[Any]:
+        with self._lock:
+            item = self._data.get(key)
+            if item is None:
+                return None
+            value, expire_at = item
+            if time.time() > expire_at:
+                del self._data[key]
+                return None
+            self._data.move_to_end(key)
+            return value
 
-    # 2. 检索相关片段
+    def set(self, key: str, value: Any) -> None:
+        with self._lock:
+            if key in self._data:
+                del self._data[key]
+            self._data[key] = (value, time.time() + self.ttl)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+    def __contains__(self, key: str) -> bool:
+        return self.get(key) is not None
+
+
+_chat_cache = _TTLCache(maxsize=500, ttl=600)
+
+
+def clear_chat_cache():
+    """文档增删后清空问答缓存，保证答案新鲜度"""
+    _chat_cache.clear()
+
+
+def _chat_cache_key(query: str, user_id: str, history: List[dict], use_rerank: bool = True) -> str:
+    """缓存键：用户 + 问题 + 最近历史摘要（多轮上下文不同则不命中）"""
+    history_sig = "|".join(f"{m['role']}:{m['content'][:50]}" for m in history)
+    return hashlib.sha256(f"{user_id}|{query}|{use_rerank}|{history_sig}".encode()).hexdigest()
+
+
+def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bool = True) -> Dict[str, Any]:
+    """检索 + LLM 生成（带缓存），不做落库"""
+    cache_key = _chat_cache_key(query, user_id, history, use_rerank)
+    cached = _chat_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     sources = retrieve(query, use_rerank=use_rerank)
 
     if not sources:
         answer = "知识库中没有相关内容，请尝试其他问题。"
-        context_msg = query  # 无来源时直接用原问题
+        context_msg = query
     else:
-        # 构造当前问题的上下文
         context_parts = []
         for i, s in enumerate(sources, 1):
             section = f"[{s['section']}] " if s.get("section") else ""
@@ -226,19 +313,48 @@ def chat(
         context = "\n\n".join(context_parts)
         context_msg = f"上下文：\n{context}\n\n用户问题：{query}"
 
-    # 3. 拼接多轮历史 + 当前问题
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in history:
         messages.append({"role": m["role"], "content": m["content"]})
     messages.append({"role": "user", "content": context_msg})
 
     answer = llm_client.chat(messages)
+    result = {"answer": answer, "sources": sources}
+    _chat_cache.set(cache_key, result)
+    return result
 
-    # 4. 新对话此时才创建
+
+def chat(
+    query: str,
+    user_id: str,
+    conversation_id: Optional[str] = None,
+    use_rerank: bool = True,
+) -> dict:
+    """问答：检索 → LLM 生成（可缓存）→ 落库
+
+    - 不传 conversation_id 时新建对话（标题取 query 前 30 字）
+    - 取最近 chat_history_rounds 轮历史作为多轮上下文
+    - 同用户同问题+同历史 10 分钟内命中缓存，跳过检索+LLM，但仍记录消息
+    - 返回：{answer, sources, conversation_id}
+    """
+    # 1. 已有对话：取历史
+    history = []
+    if conversation_id:
+        conv = ConversationRepository.get_by_id(conversation_id)
+        if conv is None or str(conv["user_id"]) != user_id:
+            raise ValueError("对话不存在或无权访问")
+        history = MessageRepository.get_recent(conversation_id, settings.chat_history_rounds)
+
+    # 2. 生成回答（命中缓存则跳过检索+LLM）
+    result = _chat_generate(query, user_id, history, use_rerank=use_rerank)
+    answer = result["answer"]
+    sources = result["sources"]
+
+    # 3. 新对话此时才创建
     if not conversation_id:
         conversation_id = ConversationRepository.create(user_id, title=query[:30])
 
-    # 5. 落库：user 消息 + assistant 消息
+    # 4. 落库：user 消息 + assistant 消息（缓存命中也记录）
     MessageRepository.create(conversation_id, role="user", content=query)
     MessageRepository.create(
         conversation_id,
@@ -253,3 +369,81 @@ def chat(
         "sources": sources,
         "conversation_id": conversation_id,
     }
+
+
+def chat_stream(
+    query: str,
+    user_id: str,
+    conversation_id: Optional[str] = None,
+    use_rerank: bool = True,
+):
+    """流式问答：逐 token yield 内容，结束后落库
+
+    生成器 yield 的内容：
+      - {"type": "start", "conversation_id": str, "sources": list}
+      - {"type": "token", "content": str}  (多次)
+      - {"type": "done"}
+    """
+    # 1. 已有对话：取历史
+    history = []
+    if conversation_id:
+        conv = ConversationRepository.get_by_id(conversation_id)
+        if conv is None or str(conv["user_id"]) != user_id:
+            raise ValueError("对话不存在或无权访问")
+        history = MessageRepository.get_recent(conversation_id, settings.chat_history_rounds)
+
+    # 2. 新对话先创建（流式需要提前拿到 conversation_id）
+    if not conversation_id:
+        conversation_id = ConversationRepository.create(user_id, title=query[:30])
+
+    # 3. 查缓存
+    cache_key = _chat_cache_key(query, user_id, history, use_rerank)
+    cached = _chat_cache.get(cache_key)
+
+    if cached is not None:
+        # 缓存命中：把答案拆成小块"流式"吐出，保证 UX 一致
+        answer = cached["answer"]
+        sources = cached["sources"]
+        yield {"type": "start", "conversation_id": conversation_id, "sources": sources}
+        chunk_size = 3
+        for i in range(0, len(answer), chunk_size):
+            yield {"type": "token", "content": answer[i:i + chunk_size]}
+    else:
+        # 缓存未命中：检索 + 流式生成
+        sources = retrieve(query, use_rerank=use_rerank)
+        if not sources:
+            answer = "知识库中没有相关内容，请尝试其他问题。"
+            context_msg = query
+        else:
+            context_parts = []
+            for i, s in enumerate(sources, 1):
+                section = f"[{s['section']}] " if s.get("section") else ""
+                context_parts.append(f"[{i}] {section}{s['content']}")
+            context = "\n\n".join(context_parts)
+            context_msg = f"上下文：\n{context}\n\n用户问题：{query}"
+
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for m in history:
+            messages.append({"role": m["role"], "content": m["content"]})
+        messages.append({"role": "user", "content": context_msg})
+
+        yield {"type": "start", "conversation_id": conversation_id, "sources": sources}
+
+        answer_parts = []
+        for token in llm_client.chat_stream(messages):
+            answer_parts.append(token)
+            yield {"type": "token", "content": token}
+        answer = "".join(answer_parts)
+        _chat_cache.set(cache_key, {"answer": answer, "sources": sources})
+
+    # 4. 落库
+    MessageRepository.create(conversation_id, role="user", content=query)
+    MessageRepository.create(
+        conversation_id,
+        role="assistant",
+        content=answer,
+        sources=sources,
+    )
+    ConversationRepository.touch(conversation_id)
+
+    yield {"type": "done"}

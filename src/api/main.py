@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,7 +44,7 @@ from src.db.repository import (
 )
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, supported_extensions
-from src.rag import chat as rag_chat, ingest_file, retrieve as rag_retrieve
+from src.rag import chat as rag_chat, chat_stream as rag_chat_stream, clear_chat_cache, ingest_file, retrieve as rag_retrieve
 from src.vectorstore import vector_store
 
 
@@ -265,19 +266,20 @@ async def ingest(file: UploadFile = File(...), current_user: dict = Depends(get_
     file_bytes = await file.read()
 
     try:
-        result = ingest_file(file_bytes, filename)
+        result = ingest_file(file_bytes, filename, user_id=current_user["id"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"入库失败：{e}")
 
+    clear_chat_cache()  # 文档变化，清空问答缓存
     return IngestResponse(**result)
 
 
-@app.get("/documents", summary="获取已入库文档列表")
+@app.get("/documents", summary="获取当前用户的已入库文档列表")
 async def list_documents(current_user: dict = Depends(get_current_user)):
-    """返回所有已入库文档（文件名、块数、上传时间）。需登录。"""
-    rows = DocumentRepository.list_all()
+    """只返回当前用户上传的文档（用户隔离）。需登录。"""
+    rows = DocumentRepository.list_by_user(current_user["id"])
     return {
         "documents": [
             {
@@ -302,15 +304,23 @@ async def delete_document(
     doc = DocumentRepository.get_by_id(document_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="文档不存在")
+    # 用户隔离校验：只能删自己的文档
+    if str(doc.get("user_id") or "") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="无权删除他人文档")
 
-    # 取出该文档所有 chunk 的 qdrant_point_id，从向量库删除
+    # 取出该文档所有 chunk 的 qdrant_point_id
     chunks = ChunkRepository.get_by_document_id(document_id)
-    point_ids = [c["qdrant_point_id"] for c in chunks if c.get("qdrant_point_id")]
+    point_ids = [str(c["qdrant_point_id"]) for c in chunks if c.get("qdrant_point_id")]
+
+    # 仅当这些向量不被其他文档引用时，才从 Qdrant 删除
     if point_ids:
-        vector_store.delete_by_ids(point_ids)
+        ref_count = ChunkRepository.count_by_qdrant_ids_excluding_doc(point_ids, document_id)
+        if ref_count == 0:
+            vector_store.delete_by_ids(point_ids)
 
     # PG 删除文档（chunks 表 ON DELETE CASCADE 自动清理）
     db.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+    clear_chat_cache()  # 文档变化，清空问答缓存
     return {"ok": True, "deleted_chunks": len(chunks)}
 
 
@@ -357,6 +367,45 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=500, detail=f"问答失败：{e}")
 
     return result
+
+
+@app.post(
+    "/chat/stream",
+    summary="流式问答：SSE 逐 token 返回",
+)
+async def chat_stream_endpoint(request: ChatRequest, current_user: dict = Depends(get_current_user)):
+    """流式问答接口，返回 SSE 事件流。
+
+    事件格式（每行 `data: {json}\\n\\n`）：
+      - {"type": "start", "conversation_id": "...", "sources": [...]}
+      - {"type": "token", "content": "..."}  (多次)
+      - {"type": "done"}
+    """
+    import json
+
+    def event_stream():
+        try:
+            for event in rag_chat_stream(
+                query=request.query,
+                user_id=current_user["id"],
+                conversation_id=request.conversation_id,
+                use_rerank=request.use_rerank,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except ValueError as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'问答失败：{e}'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ===== 多轮对话接口 =====

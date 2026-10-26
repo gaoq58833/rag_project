@@ -56,6 +56,22 @@ class LLMClient:
         )
         return resp.choices[0].message.content or ""
 
+    def chat_stream(self, messages: List[dict], temperature: float = 0.2, max_tokens: int = 2048):
+        """流式对话补全，逐 token yield 文本片段"""
+        stream = self.chat_client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
     def rerank(self, query: str, documents: List[str], top_n: Optional[int] = None) -> List[int]:
         """重排，返回排序后的文档索引列表（分数从高到低）
 

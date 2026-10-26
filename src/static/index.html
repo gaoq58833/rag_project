@@ -737,31 +737,88 @@ async function sendMessage() {
 
   appendMessage('user', query);
 
-  // 思考中
+  // 占位的 AI 消息框，内容流式追加
   const box = document.getElementById('chat-messages');
-  const thinkId = 'think-' + Date.now();
-  const thinkDiv = document.createElement('div');
-  thinkDiv.className = 'msg assistant';
-  thinkDiv.id = thinkId;
-  thinkDiv.innerHTML = `<div class="msg-role">AI</div><div class="msg-body"><div class="thinking"><span></span><span></span><span></span></div></div>`;
-  box.appendChild(thinkDiv);
+  const aiId = 'ai-' + Date.now();
+  const aiDiv = document.createElement('div');
+  aiDiv.className = 'msg assistant';
+  aiDiv.id = aiId;
+  aiDiv.innerHTML = `<div class="msg-role">AI</div><div class="msg-body"><div class="thinking"><span></span><span></span><span></span></div></div>`;
+  box.appendChild(aiDiv);
   box.scrollTop = box.scrollHeight;
 
+  let answerText = '';
+  let sources = [];
+  let started = false;
+
   try {
-    const res = await api('POST', '/chat', {
-      query,
-      conversation_id: currentConvId,
-      use_rerank: true,
+    const res = await fetch(API + '/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + getToken(),
+      },
+      body: JSON.stringify({
+        query,
+        conversation_id: currentConvId,
+        use_rerank: true,
+      }),
     });
-    document.getElementById(thinkId).remove();
-    appendMessage('assistant', res.answer, res.sources || []);
-    if (!currentConvId && res.conversation_id) {
-      currentConvId = res.conversation_id;
-      await loadConversations();
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(extractError(err) || ('HTTP ' + res.status));
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (!data) continue;
+        let event;
+        try { event = JSON.parse(data); } catch { continue; }
+
+        if (event.type === 'start') {
+          started = true;
+          sources = event.sources || [];
+          // 替换思考动画为文本容器
+          const body = aiDiv.querySelector('.msg-body');
+          body.innerHTML = '<pre></pre>';
+          if (!currentConvId && event.conversation_id) {
+            currentConvId = event.conversation_id;
+            loadConversations();
+          }
+        } else if (event.type === 'token') {
+          answerText += event.content;
+          const pre = aiDiv.querySelector('pre');
+          if (pre) pre.textContent = answerText;
+          box.scrollTop = box.scrollHeight;
+        } else if (event.type === 'error') {
+          throw new Error(event.message || '回答失败');
+        } else if (event.type === 'done') {
+          // 追加来源
+          if (sources.length) {
+            const body = aiDiv.querySelector('.msg-body');
+            const srcHtml = `<div class="msg-sources"><div class="src-label">// 来源</div>` +
+              sources.map(s => `<div class="src-item">[${s.filename}] ${s.section || ''} <span class="score">(${(s.score||0).toFixed(3)})</span></div>`).join('') +
+              `</div>`;
+            body.insertAdjacentHTML('beforeend', srcHtml);
+          }
+        }
+      }
     }
   } catch (e) {
-    document.getElementById(thinkId).remove();
-    appendMessage('assistant', '[!] 回答失败: ' + e.message);
+    const body = aiDiv.querySelector('.msg-body');
+    body.innerHTML = `<pre>[!] 回答失败: ${esc(e.message)}</pre>`;
   }
 }
 

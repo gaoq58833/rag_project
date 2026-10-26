@@ -4,8 +4,10 @@
 -- 文档表：每个上传文件一条记录
 CREATE TABLE IF NOT EXISTS documents (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID REFERENCES users(id) ON DELETE SET NULL,  -- 上传者，用户隔离
     filename        TEXT NOT NULL,
     file_ext        TEXT NOT NULL,
+    content_hash    VARCHAR(64),    -- 文件内容 SHA-256，用于去重
     total_pages     INTEGER NOT NULL DEFAULT 0,
     table_count     INTEGER NOT NULL DEFAULT 0,
     chunk_count     INTEGER NOT NULL DEFAULT 0,
@@ -72,3 +74,9 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_time
     ON messages (conversation_id, created_at ASC);
+
+-- ===== 迁移：为已有 documents 表补列（幂等）=====
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64);
+CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents (user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents (content_hash);

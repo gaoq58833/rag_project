@@ -17,10 +17,14 @@
 - **智能分块**：段落优先的级联降级策略（段落 → 句子 → 字符），表格原子化、图片归属、章节路径溯源
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
 - **RAG 全链路**：入库（解析→分块→向量化）→ 向量召回（Qdrant HNSW）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
+- **流式输出**：`/chat/stream` SSE 接口，逐 token 渲染回答，缓存命中时模拟流式保持体验一致
+- **问答缓存**：同用户同问题+同历史 10 分钟内直接返回（TTL=600s，maxsize=500，LRU 淘汰），跳过检索+LLM，响应从 4s 降到 50ms
+- **内容去重**：入库时计算文件 SHA-256，相同内容只向量化一次，多用户共享向量，删除时按引用计数安全清理
+- **用户隔离**：文档/对话按 user_id 归属，只能查看和删除自己的资源
 - **业务库**：完整 chunk 数据入 PostgreSQL（JSONB），Qdrant 只存向量 + 最小 payload，检索后回查 PG
-- **REST API**：FastAPI + uvicorn，`/ingest`、`/retrieve`、`/chat` 等，Swagger 文档自动生成
-- **量化评测**：百分制打分（完整性 / 块大小 / 表格 / 粒度 / 可追溯），结果可复现
-- **容器化部署**：Dockerfile 就绪，CPU / GPU 双版本支持
+- **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染、引用来源展示
+- **REST API**：FastAPI + uvicorn，Swagger 文档自动生成
+- **容器化部署**：Docker Compose 一键启动（postgres + qdrant + rag-api）
 
 ---
 
@@ -304,14 +308,17 @@ chunks = chunker.split(markdown_text)
 ### 入库（ingest）
 
 ```
-文件 → 解析 → 分块 → 向量化(content) → 同时写入：
-  ├─ PostgreSQL.documents  （文档元数据）
-  ├─ PostgreSQL.chunks     （完整 chunk：content/section/type/images...）
-  └─ Qdrant                （向量 + 最小 payload：qdrant_point_id/filename/section）
+文件 → 计算 SHA-256(content_hash) → 查表是否已存在相同 hash？
+  ├─ 存在 → 复用已有 chunks + Qdrant 向量，跳过解析/分块/向量化
+  └─ 不存在 → 解析 → 分块 → 向量化(content) → 同时写入：
+       ├─ PostgreSQL.documents  （文档元数据 + content_hash + user_id）
+       ├─ PostgreSQL.chunks     （完整 chunk：content/section/type/images...）
+       └─ Qdrant                （向量 + 最小 payload：qdrant_point_id/filename/section）
 ```
 
-- **同名文件覆盖**：入库前按 filename 删旧记录（PG 级联删 chunks，Qdrant 按 payload 删）
-- **Point ID 用 UUID**：Qdrant 本地模式要求，同时存入 PG 的 `chunks.qdrant_point_id` 用于回查
+- **内容去重**：相同内容只向量化一次，多用户共享同一批 Qdrant 向量，节省 API 开销
+- **用户隔离**：documents 表记录 user_id，`/documents` 只返回当前用户的文档
+- **安全删除**：删除文档时检查 Qdrant 向量是否被其他文档引用，无引用才真正删除
 
 ### 检索（retrieve）
 
@@ -324,14 +331,24 @@ query → embed → Qdrant.query_points(top_k=10) → 拿到 qdrant_point_id 列
 
 ```
 retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生成 → answer + sources
+                ↑
+        问答缓存：同用户同问题+同历史 10 分钟内直接返回（跳过检索+LLM）
 ```
+
+- **普通模式** (`/chat`)：一次性返回完整 `{answer, sources, conversation_id}`
+- **流式模式** (`/chat/stream`)：SSE 逐 token 返回，事件类型 `start` / `token` / `done` / `error`
+- **缓存键**：`sha256(user_id + query + use_rerank + 历史摘要)`，多轮上下文不同则不命中
+- **文档变更失效**：ingest/delete 时清空缓存，保证答案新鲜度
 
 ### PostgreSQL 表结构
 
-| 表          | 关键字段                                                                                               | 说明                                           |
-| ----------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| `documents` | id, filename, file_ext, total_pages, table_count, chunk_count, raw_text, uploaded_at                   | 每个上传文件一条                               |
-| `chunks`    | id, document_id(FK), qdrant_point_id, chunk_index, content, length, chunk_type, section, images(JSONB) | 每个分块一条，通过 qdrant_point_id 关联 Qdrant |
+| 表              | 关键字段                                                                                                        | 说明                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `documents`     | id, user_id(FK), filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, uploaded_at | 每个上传文件一条，content_hash 用于去重        |
+| `chunks`        | id, document_id(FK), qdrant_point_id, chunk_index, content, length, chunk_type, section, images(JSONB)          | 每个分块一条，通过 qdrant_point_id 关联 Qdrant |
+| `users`         | id, username, password_hash, created_at                                                                         | 用户表，bcrypt 存储密码                        |
+| `conversations` | id, user_id(FK), title, created_at, updated_at                                                                  | 对话表，按用户隔离                             |
+| `messages`      | id, conversation_id(FK), role, content, sources(JSONB), created_at                                              | 消息表，user/assistant 消息 + 引用来源         |
 
 索引：`documents(filename)`、`chunks(document_id)`、`chunks(qdrant_point_id)`、`chunks(chunk_type)`、`chunks(section)`、`chunks(images)` GIN。
 
@@ -351,21 +368,24 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
 ### 接口列表
 
-| 方法   | 路径                           | 鉴权 | 说明                                                       |
-| ------ | ------------------------------ | ---- | ---------------------------------------------------------- |
-| GET    | `/health`                      | 否   | 健康检查                                                   |
-| GET    | `/formats`                     | 否   | 返回支持的扩展名列表                                       |
-| POST   | `/parse`                       | 否   | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块） |
-| POST   | `/chunk`                       | 否   | 上传文件 → 解析并分块，返回 `chunks` 列表                  |
-| POST   | `/auth/register`               | 否   | 用户注册，返回 JWT token                                   |
-| POST   | `/auth/login`                  | 否   | 用户名密码登录，返回 JWT token                             |
-| GET    | `/auth/me`                     | 是   | 获取当前登录用户信息                                       |
-| POST   | `/ingest`                      | 是   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant    |
-| POST   | `/retrieve`                    | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）           |
-| POST   | `/chat`                        | 是   | `query` → 检索 → LLM 生成回答 + 引用来源，支持多轮对话     |
-| GET    | `/conversations`               | 是   | 获取当前用户的对话列表                                     |
-| GET    | `/conversations/{id}/messages` | 是   | 获取指定对话的全部消息                                     |
-| DELETE | `/conversations/{id}`          | 是   | 删除对话及其全部消息                                       |
+| 方法   | 路径                           | 鉴权 | 说明                                                                    |
+| ------ | ------------------------------ | ---- | ----------------------------------------------------------------------- |
+| GET    | `/health`                      | 否   | 健康检查                                                                |
+| GET    | `/formats`                     | 否   | 返回支持的扩展名列表                                                    |
+| POST   | `/parse`                       | 否   | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块）              |
+| POST   | `/chunk`                       | 否   | 上传文件 → 解析并分块，返回 `chunks` 列表                               |
+| POST   | `/auth/register`               | 否   | 用户注册，返回 JWT token                                                |
+| POST   | `/auth/login`                  | 否   | 用户名密码登录，返回 JWT token                                          |
+| GET    | `/auth/me`                     | 是   | 获取当前登录用户信息                                                    |
+| POST   | `/ingest`                      | 是   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant（自动内容去重） |
+| GET    | `/documents`                   | 是   | 获取当前用户的文档列表（用户隔离）                                      |
+| DELETE | `/documents/{id}`              | 是   | 删除文档及其向量（共享向量按引用计数安全清理）                          |
+| POST   | `/retrieve`                    | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）                        |
+| POST   | `/chat`                        | 是   | `query` → 检索 → LLM 生成回答 + 引用来源，支持多轮对话                  |
+| POST   | `/chat/stream`                 | 是   | 流式问答，SSE 逐 token 返回                                             |
+| GET    | `/conversations`               | 是   | 获取当前用户的对话列表                                                  |
+| GET    | `/conversations/{id}/messages` | 是   | 获取指定对话的全部消息                                                  |
+| DELETE | `/conversations/{id}`          | 是   | 删除对话及其全部消息                                                    |
 
 > 鉴权接口需在请求头携带 `Authorization: Bearer <token>`。
 > `/chat` 多轮对话：首次调用不传 `conversation_id` 会新建对话并返回 ID；后续调用传入该 ID 即可带入最近 5 轮上下文（`CHAT_HISTORY_ROUNDS` 可调）。
@@ -425,6 +445,17 @@ print(r.json()["answer"])
 r = requests.get(f"{BASE}/conversations/{cid}/messages", headers=headers)
 for m in r.json()["messages"]:
     print(f"[{m['role']}] {m['content'][:80]}")
+
+# 流式问答（SSE）—— 逐 token 接收
+import json
+with requests.post(f"{BASE}/chat/stream", json={"query": "RNN 是什么？"}, headers=headers, stream=True) as r:
+    for line in r.iter_lines(decode_unicode=True):
+        if line.startswith("data: "):
+            event = json.loads(line[6:])
+            if event["type"] == "token":
+                print(event["content"], end="", flush=True)
+            elif event["type"] == "done":
+                print()
 ```
 
 ```bash
@@ -652,6 +683,8 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `RETRIEVAL_TOP_K`     | `10`   | 向量召回数量                |
 | `RERANK_TOP_N`        | `3`    | 重排后保留数量              |
 | `CHAT_HISTORY_ROUNDS` | `5`    | 多轮对话保留最近 N 轮上下文 |
+| `CHAT_CACHE_TTL`      | `600`  | 问答缓存过期时间（秒）      |
+| `CHAT_CACHE_MAXSIZE`  | `500`  | 问答缓存最大条目数（LRU）   |
 
 ### JWT 鉴权
 

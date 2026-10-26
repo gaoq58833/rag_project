@@ -17,15 +17,17 @@ class DocumentRepository:
         table_count: int,
         chunk_count: int,
         raw_text: Optional[str] = None,
+        content_hash: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> str:
         """插入文档记录，返回 document_id (UUID 字符串)"""
         doc_id = str(uuid.uuid4())
         db.execute(
             """
-            INSERT INTO documents (id, filename, file_ext, total_pages, table_count, chunk_count, raw_text)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO documents (id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (doc_id, filename, file_ext, total_pages, table_count, chunk_count, raw_text),
+            (doc_id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text),
         )
         return doc_id
 
@@ -44,6 +46,14 @@ class DocumentRepository:
         )
 
     @staticmethod
+    def get_by_content_hash(content_hash: str) -> Optional[Dict[str, Any]]:
+        """按内容哈希查找已有文档（用于去重复用）"""
+        return db.query_one(
+            "SELECT * FROM documents WHERE content_hash = %s ORDER BY uploaded_at ASC LIMIT 1",
+            (content_hash,),
+        )
+
+    @staticmethod
     def delete_by_filename(filename: str) -> int:
         """按文件名删除文档及其所有 chunks（ON DELETE CASCADE 自动删 chunks）"""
         return db.execute("DELETE FROM documents WHERE filename = %s", (filename,))
@@ -51,6 +61,14 @@ class DocumentRepository:
     @staticmethod
     def list_all() -> List[Dict[str, Any]]:
         return db.query_all("SELECT * FROM documents ORDER BY uploaded_at DESC")
+
+    @staticmethod
+    def list_by_user(user_id: str) -> List[Dict[str, Any]]:
+        """只返回指定用户上传的文档"""
+        return db.query_all(
+            "SELECT * FROM documents WHERE user_id = %s ORDER BY uploaded_at DESC",
+            (user_id,),
+        )
 
 
 class ChunkRepository:
@@ -106,6 +124,18 @@ class ChunkRepository:
     @staticmethod
     def delete_by_document_id(document_id: str) -> int:
         return db.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
+
+    @staticmethod
+    def count_by_qdrant_ids_excluding_doc(qdrant_ids: List[str], exclude_document_id: str) -> int:
+        """统计这些 point_id 被其他文档引用的次数（用于判断删 Qdrant 是否安全）"""
+        if not qdrant_ids:
+            return 0
+        sql = """
+            SELECT COUNT(*) FROM chunks
+            WHERE qdrant_point_id = ANY(%s::uuid[]) AND document_id != %s
+        """
+        row = db.query_one(sql, (qdrant_ids, exclude_document_id))
+        return row["count"] if row else 0
 
 
 class UserRepository:

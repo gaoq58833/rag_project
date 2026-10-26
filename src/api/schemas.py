@@ -55,6 +55,7 @@ class IngestResponse(BaseModel):
     filename: str
     chunk_count: int
     stored_count: int
+    reused: bool = False
 
 
 class RetrievedChunk(BaseModel):
