@@ -20,6 +20,7 @@ class Settings:
     embedding_api_key: str = os.getenv("EMBEDDING_API_KEY") or os.getenv("LLM_API_KEY", "")
     embedding_base_url: str = os.getenv("EMBEDDING_BASE_URL") or os.getenv("LLM_BASE_URL", "")
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-flash")
+    embedding_dim: int = int(os.getenv("EMBEDDING_DIM", "1024"))  # 换 embedding 模型时同步修改
 
     # Reranker
     reranker_api_key: str = os.getenv("RERANKER_API_KEY") or os.getenv("LLM_API_KEY", "")

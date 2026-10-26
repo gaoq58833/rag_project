@@ -438,16 +438,35 @@ curl -X POST http://localhost:8000/chat \
 
 ## 🐳 Docker 部署
 
-### CPU 版本
+一键启动全部服务（PostgreSQL + Qdrant + RAG API），无需单独安装数据库：
 
 ```bash
-docker build -t rag-project:cpu .
-docker run -p 8000:8000 rag-project:cpu
+docker compose up -d --build
 ```
 
-### GPU 版本
+启动后三个服务自动就绪：
 
-需要宿主机安装 NVIDIA 驱动 + `nvidia-container-toolkit`：
+| 服务           | 端口        | 说明                               |
+| -------------- | ----------- | ---------------------------------- |
+| `rag-api`      | 8000        | FastAPI 接口，自动建表并加载模型   |
+| `rag-postgres` | 5432        | 业务库，数据持久化到 docker 卷     |
+| `rag-qdrant`   | 6333 / 6334 | 向量库（服务模式，取代本地嵌入式） |
+
+API 容器内通过服务名 `postgres` / `qdrant` 互连，无需改 `.env`。
+
+### 常用命令
+
+```bash
+docker compose ps                    # 查看状态
+docker logs -f rag-api               # 查看 API 日志
+docker compose restart rag-api       # 重启 API
+docker compose down                  # 停止（数据卷保留）
+docker compose down -v               # 停止并删除数据
+```
+
+### CPU / GPU 版本
+
+默认 `docker-compose.yml` 使用 CPU 版镜像。如需 GPU 加速（宿主机需 NVIDIA 驱动 + `nvidia-container-toolkit`），单独构建 GPU 镜像：
 
 ```bash
 docker build -f Dockerfile.gpu -t rag-project:gpu .
@@ -549,6 +568,7 @@ test_file/            测试样本
 .env.example          环境变量模板
 Dockerfile            CPU 版镜像构建
 Dockerfile.gpu        GPU 版镜像构建
+docker-compose.yml    一键编排（PG + Qdrant + API）
 ```
 
 ---
@@ -586,6 +606,7 @@ Dockerfile.gpu        GPU 版镜像构建
 | `EMBEDDING_BASE_URL` | = LLM_BASE_URL         | Embedding 服务端点                                                                      |
 | `RERANKER_BASE_URL`  | = LLM_BASE_URL         | Rerank 服务端点                                                                         |
 | `EMBEDDING_MODEL`    | `text-embedding-flash` | 向量化模型（1024 维）                                                                   |
+| `EMBEDDING_DIM`      | `1024`                 | 向量维度，必须与 embedding 模型输出一致，换模型时同步修改并重建向量库                   |
 | `LLM_MODEL`          | `qwen3.7-plus`         | 问答模型                                                                                |
 | `RERANKER_MODEL`     | `bge-reranker-v2-m3`   | 重排模型                                                                                |
 

@@ -20,16 +20,13 @@ COPY pyproject.toml uv.lock ./
 
 # 安装依赖（不安装项目本身，src 布局通过 PYTHONPATH 访问）
 # 不用 --frozen：uv.lock 是 CUDA 版 torch，这里重定向到 CPU 索引后需重新解析
-# 写入国内可用 DNS（8.8.8.8 在容器内不通）
-RUN printf "nameserver 120.196.165.24\nnameserver 223.5.5.5\n" > /etc/resolv.conf \
-    && uv sync --no-install-project
+RUN uv sync --no-install-project
 
 # ---------- 运行阶段 ----------
 FROM python:3.12-slim AS runtime
 
 # docling / torch / pillow 需要的系统库
-RUN printf "nameserver 120.196.165.24\nnameserver 223.5.5.5\n" > /etc/resolv.conf \
-    && apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 \
         libglib2.0-0 \
         libsm6 \

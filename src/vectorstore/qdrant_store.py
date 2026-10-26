@@ -38,7 +38,7 @@ class VectorStore:
             client.create_collection(
                 collection_name=self.collection,
                 vectors_config=VectorParams(
-                    size=1024,  # text-embedding-flash 默认维度
+                    size=settings.embedding_dim,  # 从 .env 读取（EMBEDDING_DIM）
                     distance=Distance.COSINE,
                     on_disk=True,
                 ),

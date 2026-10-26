@@ -1,0 +1,55 @@
+# RAG 项目服务编排：PostgreSQL + Qdrant + API
+# 启动：docker compose up -d
+# 注意：需要本机代理（端口 7897）可用，否则镜像拉取/构建会失败
+
+services:
+  # 业务数据库：存文档元数据 + chunk 完整数据 + 用户表
+  postgres:
+    image: postgres:16-alpine
+    container_name: rag-postgres
+    environment:
+      POSTGRES_DB: rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}   # .env 里 PG_PASSWORD 为空时用默认值 postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # 向量数据库：服务模式（替代本地嵌入式 ./data/qdrant）
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    ports:
+      - "6333:6333"   # HTTP API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # RAG API 服务
+  rag-api:
+    build: .
+    container_name: rag-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    env_file: .env
+    environment:
+      # 容器内走服务模式，覆盖 .env 里的本地嵌入式配置
+      QDRANT_PATH: ""
+      QDRANT_URL: http://qdrant:6333
+      PG_HOST: postgres
+      PG_PASSWORD: ${PG_PASSWORD:-postgres}
+    ports:
+      - "8000:8000"
+
+volumes:
+  pg_data:
+  qdrant_data:
