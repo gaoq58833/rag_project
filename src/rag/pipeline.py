@@ -1,12 +1,16 @@
 """RAG 管线：入库（解析→分块→向量化→存 PG+Qdrant）、检索（向量召回→重排→回查 PG）、问答"""
 import hashlib
+import logging
 import time
 import uuid
 from collections import OrderedDict
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
 from src.config import settings
+from src.db.fts import bm25_search, rrf_fuse, tokenize
 from src.db.repository import (
     ChunkRepository,
     ConversationRepository,
@@ -17,6 +21,7 @@ from src.llm import llm_client
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser
 from src.vectorstore import vector_store
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 
 DEFAULT_CHUNKER = TextChunker(
@@ -75,167 +80,221 @@ RNN 通过隐藏状态在时间步之间传递来处理序列。它逐个读取�
 """
 
 
-def ingest_file(file_bytes: bytes, filename: str, user_id: Optional[str] = None) -> dict:
-    """入库：解析 → 分块 → 向量化 → 同时写入 PostgreSQL 和 Qdrant
+def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = None) -> dict:
+    """入库快速通道（同步，毫秒级返回）：
 
-    去重策略：
-      - 计算文件内容 SHA-256，若已存在相同 hash 的文档，直接复用其 chunks 和 Qdrant 向量，
-        跳过解析/分块/向量化，节省 API 调用。
+    1. 内容哈希查重：同用户传过相同文件 → 直接复用向量，同步完成（不调 embedding，很快）
+    2. 否则创建 status=processing 的文档记录，立即返回 document_id，
+       解析/分块/向量化交给 process_ingest 后台执行
 
-    数据分工：
-      - PostgreSQL：完整 chunk 数据（content/section/type/images 等）
-      - Qdrant：向量 + 最小 payload（用于检索后回查 PG）
-
-    返回：{filename, chunk_count, stored_count, reused: bool}
+    返回：{document_id, filename, status, reused, chunk_count?, stored_count?}
     """
-    # 0. 计算内容哈希
     content_hash = hashlib.sha256(file_bytes).hexdigest()
 
-    # 1. 查是否已有相同内容的文档（去重复用）
-    existing = DocumentRepository.get_by_content_hash(content_hash)
+    existing = DocumentRepository.get_by_content_hash(content_hash, user_id=user_id)
     file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
     if existing is not None:
-        # 复用已有文档的 chunks 和向量
+        # 仅同一用户的相同内容才复用向量（跨用户不复用，保证 Qdrant user_id 过滤隔离）
         existing_id = existing["id"]
         existing_chunks = ChunkRepository.get_by_document_id(existing_id)
 
-        # 创建新 document 记录（指向同一批向量）
-        document_id = DocumentRepository.create(
-            filename=filename,
-            file_ext=file_ext,
-            total_pages=existing["total_pages"],
-            table_count=existing["table_count"],
-            chunk_count=len(existing_chunks),
-            raw_text=existing.get("raw_text"),
-            content_hash=content_hash,
-            user_id=user_id,
-        )
+        # 已有文档 chunks 为空（入库失败残留或正在处理中），不复用，走完整入库
+        if not existing_chunks:
+            logger.warning(f"Document {existing_id} has 0 chunks (processing or failed), skipping reuse")
+        else:
+            document_id = DocumentRepository.create(
+                filename=filename,
+                file_ext=file_ext,
+                total_pages=existing["total_pages"],
+                table_count=existing["table_count"],
+                chunk_count=len(existing_chunks),
+                raw_text=existing.get("raw_text"),
+                content_hash=content_hash,
+                user_id=user_id,
+                status="completed",
+            )
 
-        # 复制 chunk 行（新 document_id，同 qdrant_point_id + content）
-        reused_chunks = []
-        for c in existing_chunks:
-            reused_chunks.append({
+            reused_chunks = []
+            for c in existing_chunks:
+                reused_chunks.append({
+                    "document_id": document_id,
+                    "qdrant_point_id": str(c["qdrant_point_id"]),
+                    "chunk_index": c["chunk_index"],
+                    "content": c["content"],
+                    "length": c["length"],
+                    "chunk_type": c.get("chunk_type", "text"),
+                    "section": c.get("section", ""),
+                    "images": c.get("images", []),
+                    "tokens": tokenize(c["content"]),
+                })
+            ChunkRepository.bulk_insert(reused_chunks)
+            clear_chat_cache()  # 新文档立即可检索，清空问答缓存
+
+            return {
                 "document_id": document_id,
-                "qdrant_point_id": str(c["qdrant_point_id"]),
-                "chunk_index": c["chunk_index"],
-                "content": c["content"],
-                "length": c["length"],
-                "chunk_type": c.get("chunk_type", "text"),
-                "section": c.get("section", ""),
-                "images": c.get("images", []),
-            })
-        ChunkRepository.bulk_insert(reused_chunks)
+                "filename": filename,
+                "status": "completed",
+                "chunk_count": len(existing_chunks),
+                "stored_count": len(existing_chunks),
+                "reused": True,
+            }
 
-        return {
-            "filename": filename,
-            "chunk_count": len(existing_chunks),
-            "stored_count": len(existing_chunks),
-            "reused": True,
-        }
-
-    # 2. 解析
-    parser = get_parser(filename)
-    result = parser.parse_from_bytes(file_bytes, filename)
-
-    # 3. 分块
-    chunks = DEFAULT_CHUNKER.split(result.raw_text, tables=result.tables)
-
-    # 4. 写 PG documents 表，拿到 document_id
+    # 先落一条 processing 记录，立即返回；解析/向量化在后台进行
     document_id = DocumentRepository.create(
         filename=filename,
         file_ext=file_ext,
-        total_pages=result.total_pages,
-        table_count=result.table_count,
-        chunk_count=len(chunks),
-        raw_text=result.raw_text,
+        total_pages=0,
+        table_count=0,
+        chunk_count=0,
+        raw_text=None,
         content_hash=content_hash,
         user_id=user_id,
+        status="processing",
     )
-
-    # 5. 向量化 content（只向量化正文）
-    contents = [c["content"] for c in chunks]
-    embeddings = llm_client.embed(contents)
-
-    # 6. 构造 PG chunks 记录 + Qdrant points
-    pg_chunks = []
-    qdrant_ids = []
-    qdrant_payloads = []
-    for i, chunk in enumerate(chunks):
-        point_id = str(uuid.uuid4())
-        qdrant_ids.append(point_id)
-        pg_chunks.append({
-            "document_id": document_id,
-            "qdrant_point_id": point_id,
-            "chunk_index": chunk["index"],
-            "content": chunk["content"],
-            "length": chunk["length"],
-            "chunk_type": chunk.get("type", "text"),
-            "section": chunk.get("section", ""),
-            "images": chunk.get("images", []),
-        })
-        # Qdrant payload 只存最小信息，完整数据回 PG 查
-        qdrant_payloads.append({
-            "qdrant_point_id": point_id,
-            "filename": filename,
-            "section": chunk.get("section", ""),
-        })
-
-    # 7. 写 PG chunks + Qdrant 向量
-    ChunkRepository.bulk_insert(pg_chunks)
-    vector_store.upsert(qdrant_ids, embeddings, qdrant_payloads)
-
     return {
+        "document_id": document_id,
         "filename": filename,
-        "chunk_count": len(chunks),
-        "stored_count": len(qdrant_ids),
+        "status": "processing",
         "reused": False,
     }
 
 
-def retrieve(query: str, top_k: Optional[int] = None, use_rerank: bool = True) -> List[dict]:
-    """检索：Qdrant 向量召回 → 重排 → 回 PostgreSQL 取完整 chunk
+def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: Optional[str] = None) -> None:
+    """异步入库（后台执行）：解析 → 分块 → 向量化 → 写 PG chunks + Qdrant → 更新状态
 
+    向量只在全部处理完后才写入，所以检索天然不会搜到 processing 的半成品文档。
+    失败时把文档置为 failed 并记录 error_msg，文档记录保留供用户看到失败原因。
+
+    数据分工：
+      - PostgreSQL：完整 chunk 数据（content/section/type/images 等）
+      - Qdrant：向量 + 最小 payload（用于检索后回查 PG）
+    """
+    try:
+        # 文档可能在处理期间被用户删除：开始前检查一次
+        if DocumentRepository.get_by_id(document_id) is None:
+            logger.warning(f"Document {document_id} deleted before processing, abort")
+            return
+
+        # 1. 解析
+        parser = get_parser(filename)
+        result = parser.parse_from_bytes(file_bytes, filename)
+
+        # 2. 分块
+        chunks = DEFAULT_CHUNKER.split(result.raw_text)
+
+        # 3. 向量化 content（只向量化正文）
+        contents = [c["content"] for c in chunks]
+        embeddings = llm_client.embed(contents)
+
+        # 4. 构造 PG chunks 记录 + Qdrant points
+        pg_chunks = []
+        qdrant_ids = []
+        qdrant_payloads = []
+        for chunk in chunks:
+            point_id = str(uuid.uuid4())
+            qdrant_ids.append(point_id)
+            pg_chunks.append({
+                "document_id": document_id,
+                "qdrant_point_id": point_id,
+                "chunk_index": chunk["index"],
+                "content": chunk["content"],
+                "length": chunk["length"],
+                "chunk_type": chunk.get("type", "text"),
+                "section": chunk.get("section", ""),
+                "images": chunk.get("images", []),
+                "tokens": tokenize(chunk["content"]),
+            })
+            # Qdrant payload 只存最小信息，完整数据回 PG 查
+            qdrant_payloads.append({
+                "qdrant_point_id": point_id,
+                "filename": filename,
+                "section": chunk.get("section", ""),
+                "user_id": user_id,
+            })
+
+        # 5. 写 PG chunks + Qdrant 向量（先 PG 后 Qdrant：PG 失败则 Qdrant 不会留孤儿向量）
+        ChunkRepository.bulk_insert(pg_chunks)
+        vector_store.upsert(qdrant_ids, embeddings, qdrant_payloads)
+
+        # 6. 回填解析结果，置为 completed
+        DocumentRepository.mark_completed(
+            document_id,
+            total_pages=result.total_pages,
+            table_count=result.table_count,
+            chunk_count=len(chunks),
+            raw_text=result.raw_text,
+        )
+        clear_chat_cache()  # 新文档可检索，清空问答缓存
+        logger.info(f"Document {document_id} ({filename}) ingested: {len(chunks)} chunks")
+    except Exception as e:
+        logger.error(f"Ingest failed for document {document_id} ({filename}): {e}")
+        DocumentRepository.mark_failed(document_id, str(e))
+
+
+def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: bool = True,
+             use_bm25: bool = True) -> List[dict]:
+    """混合检索：向量召回 + BM25 关键词召回 → RRF 融合 → 重排 → 回 PostgreSQL 取完整 chunk
+
+    - 向量路：语义相近（Qdrant，按 user_id 过滤）
+    - BM25 路：字面精确（PG tsvector，JOIN documents 按 user_id 过滤）
+      两路互补：编号/专名/错误码靠 BM25，同义改写靠向量
+    - use_bm25=False 时走纯向量模式（跳过 BM25 与 RRF），用于检索策略 A/B 对比评测
     返回：[{content, section, type, images, score, filename, index}, ...]
     """
     top_k = top_k or settings.retrieval_top_k
 
-    # 1. 向量召回（拿到 qdrant_point_id + score）
+    # 1. 向量召回（按 user_id 过滤，只召回当前用户的文档）
     query_vec = llm_client.embed_query(query)
-    candidates = vector_store.search(query_vec, top_k=top_k)
+    filter_ = Filter(must=[
+        FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+    ])
+    vec_candidates = vector_store.search(query_vec, top_k=top_k, filter_=filter_)
+    vec_ids = [c["payload"]["qdrant_point_id"] for c in vec_candidates]
+    # 向量路 payload 里的 filename，供结果组装
+    filename_map = {c["payload"]["qdrant_point_id"]: c["payload"].get("filename", "") for c in vec_candidates}
 
-    if not candidates:
+    # 2. 召回结果融合：use_bm25=True 走 BM25+RRF 混合，False 走纯向量（A/B 对比用）
+    if use_bm25:
+        # BM25 关键词召回（同 user_id 隔离）
+        bm25_rows = bm25_search(query, user_id, top_k=settings.bm25_top_k)
+        for row in bm25_rows:
+            filename_map.setdefault(str(row["qdrant_point_id"]), row.get("filename", ""))
+        # RRF 融合两路排名，得到统一候选顺序
+        score_map = rrf_fuse(vec_ids, bm25_rows)
+        merged_ids = sorted(score_map.keys(), key=lambda p: score_map[p], reverse=True)
+    else:
+        # 纯向量模式：直接按向量相似度排序，分数为余弦相似度
+        merged_ids = list(vec_ids)
+        score_map = {c["payload"]["qdrant_point_id"]: c.get("score", 0.0) for c in vec_candidates}
+    if not merged_ids:
         return []
 
-    # 2. 重排（用 content 文本重排）
-    if use_rerank and len(candidates) > 1:
-        # 先回 PG 拿到完整 content 用于重排
-        qdrant_ids = [c["payload"]["qdrant_point_id"] for c in candidates]
-        pg_rows = ChunkRepository.get_by_qdrant_ids(qdrant_ids)
-        pg_map = {r["qdrant_point_id"]: r for r in pg_rows}
-
-        docs = [pg_map.get(cid, {}).get("content", "") for cid in qdrant_ids]
-        rerank_indices = llm_client.rerank(query, docs, top_n=settings.rerank_top_n)
-        candidates = [candidates[i] for i in rerank_indices]
-
-    # 3. 回 PG 取完整数据，保持 Qdrant 召回顺序
-    qdrant_ids = [c["payload"]["qdrant_point_id"] for c in candidates]
-    pg_rows = ChunkRepository.get_by_qdrant_ids(qdrant_ids)
+    # 4. 回 PG 取完整数据
+    pg_rows = ChunkRepository.get_by_qdrant_ids(merged_ids)
     pg_map = {str(r["qdrant_point_id"]): r for r in pg_rows}
+    merged_ids = [pid for pid in merged_ids if pid in pg_map]
+    if not merged_ids:
+        return []
+
+    # 5. 重排（用 content 文本重排，从融合候选中取 top_n）
+    if use_rerank and len(merged_ids) > 1:
+        docs = [pg_map[pid]["content"] for pid in merged_ids]
+        rerank_indices = llm_client.rerank(query, docs, top_n=settings.rerank_top_n)
+        merged_ids = [merged_ids[i] for i in rerank_indices]
+    else:
+        merged_ids = merged_ids[:settings.rerank_top_n]
 
     results = []
-    for c in candidates:
-        pid = c["payload"]["qdrant_point_id"]
-        row = pg_map.get(pid)
-        if not row:
-            continue
+    for pid in merged_ids:
+        row = pg_map[pid]
         results.append({
             "content": row["content"],
             "section": row.get("section", ""),
             "type": row.get("chunk_type", "text"),
             "images": row.get("images", []),
-            "score": c["score"],
-            "filename": c["payload"].get("filename", ""),
+            "score": score_map.get(pid, 0.0),  # 混合模式为 RRF 融合分，纯向量模式为余弦相似度
+            "filename": filename_map.get(pid, ""),
             "index": row.get("chunk_index", 0),
         })
     return results
@@ -300,7 +359,7 @@ def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bo
     if cached is not None:
         return cached
 
-    sources = retrieve(query, use_rerank=use_rerank)
+    sources = retrieve(query, user_id=user_id, use_rerank=use_rerank)
 
     if not sources:
         answer = "知识库中没有相关内容，请尝试其他问题。"
@@ -410,7 +469,7 @@ def chat_stream(
             yield {"type": "token", "content": answer[i:i + chunk_size]}
     else:
         # 缓存未命中：检索 + 流式生成
-        sources = retrieve(query, use_rerank=use_rerank)
+        sources = retrieve(query, user_id=user_id, use_rerank=use_rerank)
         if not sources:
             answer = "知识库中没有相关内容，请尝试其他问题。"
             context_msg = query

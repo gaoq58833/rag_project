@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -44,7 +44,7 @@ from src.db.repository import (
 )
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, supported_extensions
-from src.rag import chat as rag_chat, chat_stream as rag_chat_stream, clear_chat_cache, ingest_file, retrieve as rag_retrieve
+from src.rag import chat as rag_chat, chat_stream as rag_chat_stream, clear_chat_cache, process_ingest, retrieve as rag_retrieve, submit_ingest
 from src.vectorstore import vector_store
 
 
@@ -258,21 +258,30 @@ async def me(current_user: dict = Depends(get_current_user)):
 @app.post(
     "/ingest",
     response_model=IngestResponse,
-    summary="入库：上传文档 → 解析分块 → 向量化 → 存入 Qdrant",
+    summary="入库：上传文档立即返回，解析/向量化后台异步执行",
 )
-async def ingest(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    """上传文档，自动解析、分块、向量化并写入向量库。需登录。"""
+async def ingest(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """上传文档：内容未重复时立即返回 document_id（status=processing），
+    解析/分块/向量化在后台执行，前端轮询 /documents 看状态；内容重复则同步复用秒回。需登录。"""
     filename = file.filename or "unnamed"
     file_bytes = await file.read()
 
     try:
-        result = ingest_file(file_bytes, filename, user_id=current_user["id"])
+        result = submit_ingest(file_bytes, filename, user_id=current_user["id"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"入库失败：{e}")
 
-    clear_chat_cache()  # 文档变化，清空问答缓存
+    # 命中复用的已同步完成；新文档交给后台任务处理
+    if result["status"] == "processing":
+        background_tasks.add_task(
+            process_ingest, result["document_id"], file_bytes, filename, current_user["id"]
+        )
     return IngestResponse(**result)
 
 
@@ -288,6 +297,8 @@ async def list_documents(current_user: dict = Depends(get_current_user)):
                 "file_ext": r["file_ext"],
                 "chunk_count": r["chunk_count"],
                 "total_pages": r["total_pages"],
+                "status": r.get("status", "completed"),
+                "error_msg": r.get("error_msg"),
                 "uploaded_at": r["uploaded_at"].isoformat() if r.get("uploaded_at") else None,
             }
             for r in rows
@@ -337,7 +348,7 @@ async def retrieve(
 ):
     """根据 query 检索知识库中的相关片段。需登录。"""
     try:
-        results = rag_retrieve(query, top_k=top_k, use_rerank=use_rerank)
+        results = rag_retrieve(query, user_id=current_user["id"], top_k=top_k, use_rerank=use_rerank)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"检索失败：{e}")
 

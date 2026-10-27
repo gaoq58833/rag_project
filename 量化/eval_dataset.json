@@ -1,0 +1,20 @@
+{
+  "说明": "检索层评测集。每条样本 = 一个问题 + 期望命中的文档与内容片段。命中判定：返回块的 filename 与 expected_filename 完全一致，且 content 包含 expected_substring 子串。请参照示例扩充到 20~30 条，建议两类问题都覆盖：(1) 编号/专名/参数类精确查询（BM25 优势场景）；(2) 口语化/同义改写类语义查询（向量优势场景）。",
+  "questions": [
+    {
+      "question": "编号40对应的项目名称是什么？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "测试项目 40"
+    },
+    {
+      "question": "FGSM 攻击是如何欺骗模型的？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "对抗样本"
+    },
+    {
+      "question": "LeNet 模型训练完后的准确率是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "0.972"
+    }
+  ]
+}

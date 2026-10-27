@@ -52,6 +52,7 @@ class Settings:
     # RAG 检索
     retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", "10"))
     rerank_top_n: int = int(os.getenv("RERANK_TOP_N", "3"))
+    bm25_top_k: int = int(os.getenv("BM25_TOP_K", "10"))  # BM25 关键词召回数量
     chat_history_rounds: int = int(os.getenv("CHAT_HISTORY_ROUNDS", "5"))  # 多轮对话保留最近 N 轮
 
     # LLM 生成参数

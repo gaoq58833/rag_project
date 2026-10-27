@@ -52,9 +52,11 @@ class ErrorResponse(BaseModel):
 # ===== RAG 相关 =====
 
 class IngestResponse(BaseModel):
+    document_id: str
     filename: str
-    chunk_count: int
-    stored_count: int
+    status: str = "processing"   # processing（后台处理中）/ completed（复用秒回）
+    chunk_count: int = 0
+    stored_count: int = 0
     reused: bool = False
 
 

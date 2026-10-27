@@ -24,6 +24,7 @@ dependencies = [
   "psycopg2-binary>=2.9.9",
   "python-jose[cryptography]>=3.3.0",
   "bcrypt>=4.0.0",
+  "jieba>=0.42.1",  # 中文分词，供 BM25 全文检索建索引
 ]
 
 [tool.uv.sources]

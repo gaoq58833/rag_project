@@ -1,0 +1,504 @@
+{
+  "questions": [
+    {
+      "question": "华为“智能基座”系列课程中，关于网络对抗攻击的具体课程名称是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "FGSM网络对抗攻击"
+    },
+    {
+      "question": "华为“智能基座”系列课程中FGSM网络对抗攻击的版本信息是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "版本：1.0"
+    },
+    {
+      "question": "该文档版权声明中，拥有版权的公司名称及年份是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "华为技术有限公司 2022"
+    },
+    {
+      "question": "用户购买的产品、服务或特性主要受到什么文件的约束？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "华为公司商业合同和条款"
+    },
+    {
+      "question": "请问华为技术有限公司的邮政编码具体是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "邮编：518129"
+    },
+    {
+      "question": "如果要去华为技术有限公司的总部办公楼拜访，应该前往哪个具体地址？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "深圳市龙岗区坂田华为总部办公楼"
+    },
+    {
+      "question": "这份信息记录的是哪家公司的联系方式和地址？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "华为技术有限公司"
+    },
+    {
+      "question": "FGSM算法的英文全称是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "Fast Gradient Sign Method"
+    },
+    {
+      "question": "谁最早提出了对抗样本的概念？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "Szegedy在2013年最早提出"
+    },
+    {
+      "question": "本实验使用了哪个深度学习框架？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "Mindspore深度学习框架"
+    },
+    {
+      "question": "本实验对哪个网络进行了FGSM攻击？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "一个精度达标的LeNet的网络"
+    },
+    {
+      "question": "FGSM网络对抗攻击实验使用的软件环境版本是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "MindSpore-2.1"
+    },
+    {
+      "question": "FGSM网络对抗攻击实验的开发环境配置是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "ModelArts-Ascend"
+    },
+    {
+      "question": "表格中第一行第一列对应的实验名称是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "FGSM网络对抗攻击"
+    },
+    {
+      "question": "FGSM网络对抗攻击实验中被攻击的目标模型是哪个？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "精度达标的LeNet网络"
+    },
+    {
+      "question": "昇腾910最高可达多少的浮点计算能力？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "320TFLOPS（FP16）"
+    },
+    {
+      "question": "昇腾910的片上系统集成了哪些组件使其具有自我管理能力？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "多个CPU、DVPP和任务调度器"
+    },
+    {
+      "question": "FGSM的全称英文是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "Fast Gradient Sign Method"
+    },
+    {
+      "question": "昇思MindSpore主要适用于哪些场景？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "适用于端边云场景"
+    },
+    {
+      "question": "参数 x 的参数说明内容是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "正确分类为“Pandas”的原始输入图像。"
+    },
+    {
+      "question": "表格中参数 θ 对应的说明文字是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "模型参数。"
+    },
+    {
+      "question": "参数 ε 在表格里的说明是哪几个字？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "ε | 攻击系数"
+    },
+    {
+      "question": "在神经网络训练过程中，用来衡量误差大小的指标在表中是如何表述的？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "训练网络的损失。"
+    },
+    {
+      "question": "实验中配置no_proxy环境变量时，设置的代理地址列表是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "a.test.com,127.0.0.1,2.2.2.2"
+    },
+    {
+      "question": "在数据转换的Rescale操作中，用于缩放的第一个数值参数是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "1.0 / 255.0"
+    },
+    {
+      "question": "实验准备阶段，用于下载download模块的命令行指令是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "!pip install download"
+    },
+    {
+      "question": "本案例运行FGSM攻击方法想要达到的最终效果是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "欺骗网络模型，让模型实现错误分类的效果"
+    },
+    {
+      "question": "训练集和评估集在划分批次时，设置的批次大小（batch_size）是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "batch_size=32"
+    },
+    {
+      "question": "代码中用于将图像数据从HWC格式转换为CHW格式的函数是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "transforms.HWC2CHW()"
+    },
+    {
+      "question": "在对训练集和评估集的标签（label）进行映射处理时，将其转换成了哪种数据类型？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "x.astype(\"int32\")"
+    },
+    {
+      "question": "训练集和评估集在进行批处理（batch）操作时，对于不足一个批次大小的剩余数据是如何处理的？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "drop_remainder=True"
+    },
+    {
+      "question": "文本开头提示的表格行数和总行数信息是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "【表格 · 第1-1行/共1行】"
+    },
+    {
+      "question": "表格中显示的主要数据目录名称是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "|──MNIST_Data"
+    },
+    {
+      "question": "MNIST_Data 目录下包含的子目录在文本中是如何表示的？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "|     |──test"
+    },
+    {
+      "question": "表格中列出的第一个文件名称是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "t10k-images-idx3-ubyte"
+    },
+    {
+      "question": "文本中提到的表格总共有多少行？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "第1-4行/共4行"
+    },
+    {
+      "question": "如果要获取训练集的图像数据，应该使用哪个文件？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "train-images-idx3-ubyte"
+    },
+    {
+      "question": "在train目录下，用于存储标签信息的文件是哪个？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "train-labels-idx1-ubyte"
+    },
+    {
+      "question": "在LeNet5的初始化方法中，fc1全连接层的输入和输出节点数分别是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "16 * 5 * 5, 120"
+    },
+    {
+      "question": "LeNet5网络中最大池化层max_pool2d的核大小和步长参数设置为什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "kernel_size=2, stride=2"
+    },
+    {
+      "question": "实验中使用哪个数据集对LeNet演示模型进行训练？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "MNIST数据集"
+    },
+    {
+      "question": "在LeNet5的construct前向传播过程中，经过第二次卷积和激活后，紧接着执行了什么操作？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "x = self.max_pool2d(x)"
+    },
+    {
+      "question": "优化器的动量参数（momentum）设置为多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "momentum=0.9"
+    },
+    {
+      "question": "CheckpointConfig中设置的保存检查点的步数是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "save_checkpoint_steps=1875"
+    },
+    {
+      "question": "从模型训练结果的日志输出中可以看出，一共训练了多少个epoch？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "epoch: 5 step: 1875"
+    },
+    {
+      "question": "在定义优化器之前，代码中初始化了什么损失函数？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "nn.CrossEntropyLoss()"
+    },
+    {
+      "question": "评估结果中的准确率acc的具体数值是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "0.9720552884615384"
+    },
+    {
+      "question": "加载已经训练好的LeNet模型时，使用的检查点文件名是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "checkpoint_lenet-5_1875.ckpt"
+    },
+    {
+      "question": "在代码中，先通过损失函数求取反向梯度时，定义的函数名是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "forward_fn"
+    },
+    {
+      "question": "在得到精准的LeNet网络之后，采用了哪种攻击方法在图像中加载噪声后重新进行测试？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "FSGM攻击方法"
+    },
+    {
+      "question": "在运行攻击时，batch_generate函数调用中传入的eps参数值是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "eps=0.0"
+    },
+    {
+      "question": "当攻击系数𝜀为零时，代码中计算出的攻击后的准确率结果是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "0.9879808"
+    },
+    {
+      "question": "在再次处理MNIST数据集中测试集的图片时，用于创建字典迭代器的函数调用是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "dataset_eval.create_dict_iterator()"
+    },
+    {
+      "question": "根据FGSM攻击公式，攻击系数𝜀的大小对梯度有什么影响？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "攻击系数𝜀越大，对梯度的改变就越大"
+    },
+    {
+      "question": "在调用batch_generate函数生成对抗样本时，设置的eps参数值是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "eps=0.5"
+    },
+    {
+      "question": "代码中打印出的FGSM攻击总耗时具体是多少秒？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "17.139771"
+    },
+    {
+      "question": "在绘制受攻击照片实际形态时，设置的图片分辨率dpi是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "dpi=120"
+    },
+    {
+      "question": "代码中用于展示受攻击照片实际形态的循环语句是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "for i in range(10):"
+    },
+    {
+      "question": "在创建Notebook时，建议的自动停止时间是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "建议1小时。"
+    },
+    {
+      "question": "Notebook环境内上传、创建和编辑的文件默认保存在哪个目录下？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "在/home/ma-user/work目录下。"
+    },
+    {
+      "question": "创建Notebook训练作业时，控制台区域应该选择哪里？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "乌兰察布一"
+    },
+    {
+      "question": "Notebook创建配置中，硬件规格包含的CPU核心数和内存是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "24核 96GB"
+    },
+    {
+      "question": "在华为云ModelArts控制台中关闭Notebook训练作业的具体操作步骤是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "登录华为云ModelArts控制台，在“操作”栏选择“停止”操作。"
+    },
+    {
+      "question": "文本中引用的示例图片的文件路径是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "data/images/FGSM_test_11.png"
+    },
+    {
+      "question": "实验完成后及时关闭Notebook训练作业的目的是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "避免产生不必要的资源浪费。"
+    },
+    {
+      "question": "根据文本内容，当前线上Notebook环境的搭建处于什么状态？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "至此训练用的线上Notebook环境搭建完成。"
+    },
+    {
+      "question": "华为技术有限公司的版权声明是哪一年的？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "华为技术有限公司 2022"
+    },
+    {
+      "question": "文档中提及的其他所有商标或注册商标归谁所有？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "由各自的所有人拥有"
+    },
+    {
+      "question": "如果没有得到华为公司的书面允许，其他人能对这份文档进行哪些操作限制？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "不得擅自摘抄、复制本文档内容的部分或全部，并不得以任何形式传播"
+    },
+    {
+      "question": "表格中提到的这家公司的全称是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "华为技术有限公司"
+    },
+    {
+      "question": "如果想给华为技术有限公司寄信，应该寄到哪个具体的办公地点？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "深圳市龙岗区坂田华为总部办公楼"
+    },
+    {
+      "question": "给华为技术有限公司寄信时，应该填写的邮政编码是多少？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "邮编：518129"
+    },
+    {
+      "question": "想要访问华为技术有限公司的官方网站，应该输入什么网络地址？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "http://e.huawei.com"
+    },
+    {
+      "question": "表格中列出的实验名称具体叫什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "FGSM网络对抗攻击"
+    },
+    {
+      "question": "该实验所依赖的开发环境是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "ModelArts-Ascend"
+    },
+    {
+      "question": "进行FGSM攻击的目标网络具有什么样的前提条件？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "一个精度达标的LeNet网络"
+    },
+    {
+      "question": "这个实验的简述部分说明了攻击的具体目的是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "演示FGSM此类攻击是如何误导模型的"
+    },
+    {
+      "question": "表格中参数 ε 对应的内容是什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "ε | 攻击系数"
+    },
+    {
+      "question": "参数 θ 在表格中代表什么？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "模型参数。"
+    },
+    {
+      "question": "输入图像 x 需要满足什么样的分类条件？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "正确分类为“Pandas”的原始输入图像。"
+    },
+    {
+      "question": "参数 y 具体表示什么含义？",
+      "expected_filename": "FGSM_test.docx",
+      "expected_substring": "是xx的输出。"
+    },
+    {
+      "question": "RNN的中文名称是什么？",
+      "expected_filename": "cache_test.txt",
+      "expected_substring": "循环神经网络"
+    },
+    {
+      "question": "RNN通过什么来传递序列信息？",
+      "expected_filename": "cache_test.txt",
+      "expected_substring": "通过隐藏状态传递"
+    },
+    {
+      "question": "RNN是怎么处理并传递序列中的数据的？",
+      "expected_filename": "cache_test.txt",
+      "expected_substring": "通过隐藏状态传递序列信息"
+    },
+    {
+      "question": "什么是RNN？",
+      "expected_filename": "cache_test.txt",
+      "expected_substring": "RNN是循环神经网络"
+    },
+    {
+      "question": "RNN指的是什么网络？",
+      "expected_filename": "cache_test.txt",
+      "expected_substring": "循环神经网络"
+    },
+    {
+      "question": "RNN依靠什么来传递序列信息？",
+      "expected_filename": "cache_test.txt",
+      "expected_substring": "通过隐藏状态"
+    },
+    {
+      "question": "RNN是如何在序列中传递信息的？",
+      "expected_filename": "cache_test.txt",
+      "expected_substring": "通过隐藏状态传递序列信息"
+    },
+    {
+      "question": "RNN的中文全称是什么？",
+      "expected_filename": "stream_test.txt",
+      "expected_substring": "循环神经网络"
+    },
+    {
+      "question": "这份跨页表格测试文档的主要目的是什么？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "测试文档解析系统对跨页表格的处理能力"
+    },
+    {
+      "question": "文档中反复出现填充文字的作用是什么？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "用于把表格推到页面底部，使得表格可以跨页显示"
+    },
+    {
+      "question": "表格在页面中的起始和结束位置是怎样的？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "表格从第1页底部开始，延续到第2页"
+    },
+    {
+      "question": "文档中列出的最后一行填充内容是第几行？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "第 21 行填充内容"
+    },
+    {
+      "question": "文本中第23行具体写了什么内容？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "第 23 行填充内容。"
+    },
+    {
+      "question": "这段文本一共填充到了第几行？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "第 25 行填充内容。"
+    },
+    {
+      "question": "插入这些填充文字的主要目的是什么？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "用于把表格推到页面底部，使得表格可以跨页显示。"
+    },
+    {
+      "question": "怎样才能让表格实现跨页显示的效果？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "使得表格可以跨页显示。"
+    },
+    {
+      "question": "编号为7的项目名称叫什么？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "测试项目 7"
+    },
+    {
+      "question": "编号为2的说明描述中，表格数据后面的完整描述是什么？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "表格数据 2 描述信息"
+    },
+    {
+      "question": "第4行的说明内容开头是怎么表述的？",
+      "expected_filename": "table_test.docx",
+      "expected_substring": "这是第 4 行的说明内容"
+    }
+  ]
+}

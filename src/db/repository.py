@@ -19,17 +19,38 @@ class DocumentRepository:
         raw_text: Optional[str] = None,
         content_hash: Optional[str] = None,
         user_id: Optional[str] = None,
+        status: str = "processing",
     ) -> str:
         """插入文档记录，返回 document_id (UUID 字符串)"""
         doc_id = str(uuid.uuid4())
         db.execute(
             """
-            INSERT INTO documents (id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO documents (id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (doc_id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text),
+            (doc_id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, status),
         )
         return doc_id
+
+    @staticmethod
+    def mark_completed(document_id: str, total_pages: int, table_count: int, chunk_count: int, raw_text: Optional[str]) -> int:
+        """异步入库成功：回填解析结果并把状态置为 completed"""
+        return db.execute(
+            """
+            UPDATE documents
+            SET status = 'completed', total_pages = %s, table_count = %s, chunk_count = %s, raw_text = %s, error_msg = NULL
+            WHERE id = %s
+            """,
+            (total_pages, table_count, chunk_count, raw_text, document_id),
+        )
+
+    @staticmethod
+    def mark_failed(document_id: str, error_msg: str) -> int:
+        """异步入库失败：置为 failed 并记录错误信息（截断防超长）"""
+        return db.execute(
+            "UPDATE documents SET status = 'failed', error_msg = %s WHERE id = %s",
+            (error_msg[:500], document_id),
+        )
 
     @staticmethod
     def get_by_filename(filename: str) -> Optional[Dict[str, Any]]:
@@ -46,17 +67,22 @@ class DocumentRepository:
         )
 
     @staticmethod
-    def get_by_content_hash(content_hash: str) -> Optional[Dict[str, Any]]:
-        """按内容哈希查找已有文档（用于去重复用）"""
+    def get_by_content_hash(content_hash: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """按内容哈希查找同用户已有文档（用于去重复用；向量 payload 带 user_id，只能复用本人的）"""
         return db.query_one(
-            "SELECT * FROM documents WHERE content_hash = %s ORDER BY uploaded_at ASC LIMIT 1",
-            (content_hash,),
+            "SELECT * FROM documents WHERE content_hash = %s AND user_id = %s ORDER BY uploaded_at ASC LIMIT 1",
+            (content_hash, user_id),
         )
 
     @staticmethod
     def delete_by_filename(filename: str) -> int:
         """按文件名删除文档及其所有 chunks（ON DELETE CASCADE 自动删 chunks）"""
         return db.execute("DELETE FROM documents WHERE filename = %s", (filename,))
+
+    @staticmethod
+    def delete_by_id(document_id: str) -> int:
+        """按 ID 删除文档及其所有 chunks（ON DELETE CASCADE 自动删 chunks）"""
+        return db.execute("DELETE FROM documents WHERE id = %s", (document_id,))
 
     @staticmethod
     def list_all() -> List[Dict[str, Any]]:
@@ -79,13 +105,13 @@ class ChunkRepository:
         """批量插入 chunks，返回插入行数
 
         每个 chunk dict 需包含：document_id, qdrant_point_id, chunk_index,
-        content, length, chunk_type, section, images(list)
+        content, length, chunk_type, section, images(list), tokens(jieba 分词词串)
         """
         if not chunks:
             return 0
         sql = """
-            INSERT INTO chunks (document_id, qdrant_point_id, chunk_index, content, length, chunk_type, section, images)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            INSERT INTO chunks (document_id, qdrant_point_id, chunk_index, content, length, chunk_type, section, images, tsv)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, to_tsvector('simple', %s))
         """
         params = [
             (
@@ -97,6 +123,7 @@ class ChunkRepository:
                 c.get("chunk_type", "text"),
                 c.get("section"),
                 json.dumps(c.get("images", []), ensure_ascii=False),
+                c.get("tokens", ""),
             )
             for c in chunks
         ]

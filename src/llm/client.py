@@ -24,13 +24,23 @@ class LLMClient:
             )
         return self._embedding_client
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
-        """批量 embedding，返回向量列表"""
-        resp = self.embedding_client.embeddings.create(
-            model=settings.embedding_model,
-            input=texts,
-        )
-        return [item.embedding for item in resp.data]
+    def embed(self, texts: List[str], batch_size: int = 20) -> List[List[float]]:
+        """批量 embedding，返回向量列表
+
+        多数 embedding API 限制单批条数（如 DashScope 限 20），
+        超过时自动分批调用再合并结果。
+        """
+        if not texts:
+            return []
+        all_embeddings = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            resp = self.embedding_client.embeddings.create(
+                model=settings.embedding_model,
+                input=batch,
+            )
+            all_embeddings.extend(item.embedding for item in resp.data)
+        return all_embeddings
 
     def embed_query(self, text: str) -> List[float]:
         """单个 query embedding"""

@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # 章节切换最小切分长度：上一章内容不足这个长度时与下一章合并成一块，避免切出大量碎块
 SECTION_SPLIT_MIN = 400
@@ -37,9 +37,11 @@ class TextChunker:
         self.chunk_overlap = chunk_overlap
         self.min_chunk_size = min_chunk_size
 
-    def split(self, text: str, tables: Optional[List[Dict]] = None) -> List[Dict]:
+    def split(self, text: str) -> List[Dict]:
         '''
-        通过策略对文本进行分块
+        通过策略对文本进行分块。
+        表格已由解析器内联进 raw_text，_split_by_paragraph 会把 "|" 行识别为表格单元
+        并按行窗口切分，无需再单独附加 tables 列表（否则同一表格会重复入库）。
         '''
         if self.strategy == ChunkStrategy.PARAGRAPH:
             chunks = self._split_by_paragraph(text)
@@ -49,10 +51,6 @@ class TextChunker:
             chunks = self._split_by_character(text)
         else:
             chunks = self._split_by_paragraph(text)
-        
-        # 添加表格信息
-        if tables:
-            chunks = self._attach_tables(chunks, tables)
 
         return chunks
 
@@ -560,25 +558,4 @@ class TextChunker:
                 })
                 chunk_index += 1
 
-        return chunks
-
-    def _attach_tables(self,chunks: List[Dict], tables: List[Dict]) -> List[Dict]:
-        '''
-        将表格作为单独的块添加到分块列表中
-        '''
-        chunk_index = len(chunks)
-
-        for table in tables:
-            table_text = f'表格 (第{table.get("page","?")}页)：\n {table.get("markdown", "")}'
-
-            chunks.append({
-                "content": table_text,
-                "index": chunk_index,
-                "length": len(table_text),
-                "type": "table",
-                "page":table.get("page","?"),
-                "table_data":table
-            })
-            chunk_index += 1
-        
         return chunks

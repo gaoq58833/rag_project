@@ -27,3 +27,10 @@ build.log
 # 环境变量（含 API Key，不要提交）
 .env
 
+# 前端构建产物（无 package.json 项目，临时文件）
+node_modules/
+package*.json
+
+# 测试用临时文件（table_test.docx、FGSM_test.docx 等）
+*.docx
+

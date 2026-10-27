@@ -64,7 +64,7 @@ class VectorStore:
         self,
         query_vector: List[float],
         top_k: Optional[int] = None,
-        filter_: Optional[dict] = None,
+        filter_: Optional[models.Filter] = None,
     ) -> List[dict]:
         """向量检索，返回 payload + score"""
         self._ensure_collection()
@@ -73,7 +73,7 @@ class VectorStore:
             collection_name=self.collection,
             query=query_vector,
             limit=top_k,
-            query_filter=models.Filter(**filter_) if filter_ else None,
+            query_filter=filter_,
             with_payload=True,
             with_vectors=False,
         )

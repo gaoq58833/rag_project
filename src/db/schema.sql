@@ -1,5 +1,18 @@
 -- RAG 业务库表结构
 -- 执行：psql -U postgres -d rag -f schema.sql
+-- 注意：本文件在单个事务内执行，顺序必须满足依赖关系——
+--       被外键引用的表先建，ALTER 补列必须在引用该列的索引之前。
+
+-- 用户表：JWT 鉴权用（documents/conversations 外键引用，须最先建）
+CREATE TABLE IF NOT EXISTS users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username        TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'user',  -- user / admin
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 
 -- 文档表：每个上传文件一条记录
 CREATE TABLE IF NOT EXISTS documents (
@@ -13,11 +26,19 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count     INTEGER NOT NULL DEFAULT 0,
     raw_text        TEXT,
     uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    status          TEXT NOT NULL DEFAULT 'completed'  -- processing / completed / failed
+    status          TEXT NOT NULL DEFAULT 'completed',  -- processing / completed / failed
+    error_msg       TEXT            -- 入库失败原因（status=failed 时）
 );
+
+-- 迁移：为已有 documents 表补列（幂等；新库这些列已内联，ALTER 为 no-op）
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_msg TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents (filename);
 CREATE INDEX IF NOT EXISTS idx_documents_uploaded_at ON documents (uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents (user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents (content_hash);
 
 -- 分块表：每个 chunk 一条记录，通过 qdrant_point_id 关联向量库
 CREATE TABLE IF NOT EXISTS chunks (
@@ -30,26 +51,20 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_type      TEXT NOT NULL DEFAULT 'text',  -- text / table / code
     section         TEXT,
     images          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    tsv             TSVECTOR,       -- jieba 分词后的全文索引（BM25 风格关键词检索）
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 迁移：为已有 chunks 表补 tsv 列（必须在 idx_chunks_tsv 索引之前）
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS tsv TSVECTOR;
 
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks (document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_qdrant_point_id ON chunks (qdrant_point_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_chunk_type ON chunks (chunk_type);
 CREATE INDEX IF NOT EXISTS idx_chunks_section ON chunks (section);
+CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
 -- 对 images JSONB 建 GIN 索引，方便按图片路径查询
 CREATE INDEX IF NOT EXISTS idx_chunks_images_gin ON chunks USING GIN (images);
-
--- 用户表：JWT 鉴权用
-CREATE TABLE IF NOT EXISTS users (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username        TEXT NOT NULL UNIQUE,
-    password_hash   TEXT NOT NULL,
-    role            TEXT NOT NULL DEFAULT 'user',  -- user / admin
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 
 -- 对话表：每个用户的一段对话
 CREATE TABLE IF NOT EXISTS conversations (
@@ -74,9 +89,3 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_time
     ON messages (conversation_id, created_at ASC);
-
--- ===== 迁移：为已有 documents 表补列（幂等）=====
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64);
-CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents (user_id);
-CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents (content_hash);

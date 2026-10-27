@@ -486,8 +486,8 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
         <thead>
           <tr>
             <th>文件名</th>
-            <th>类型</th>
             <th>分块数</th>
+            <th>状态</th>
             <th>上传时间</th>
             <th>操作</th>
           </tr>
@@ -611,27 +611,48 @@ function switchTab(tab) {
 }
 
 // ============ 文档管理 ============
+let docPollTimer = null;
+
 async function loadDocuments() {
   try {
     const data = await api('GET', '/documents');
     const tbody = document.getElementById('doc-tbody');
     const empty = document.getElementById('doc-empty');
     tbody.innerHTML = '';
-    if (!data.documents.length) { empty.style.display = 'block'; return; }
+    if (!data.documents.length) { empty.style.display = 'block'; stopDocPolling(); return; }
     empty.style.display = 'none';
+    let hasProcessing = false;
+    const statusMap = {
+      processing: '<span style="color:var(--amber)">⏳ 处理中</span>',
+      completed: '<span style="color:var(--green)">✓ 已完成</span>',
+      failed: '<span style="color:var(--red)">✗ 失败</span>',
+    };
     data.documents.forEach(d => {
-      const tr = document.createElement('tr');
+      if (d.status === 'processing') hasProcessing = true;
       const time = d.uploaded_at ? new Date(d.uploaded_at).toLocaleString('zh-CN') : '-';
+      const statusHtml = statusMap[d.status] || statusMap.completed;
+      const failTip = d.status === 'failed' && d.error_msg ? ` title="${String(d.error_msg).replace(/"/g, '&quot;')}"` : '';
+      const tr = document.createElement('tr');
       tr.innerHTML = `
         <td class="doc-name">${d.filename}<span class="doc-ext">${d.file_ext || ''}</span></td>
         <td>${d.chunk_count || 0} 块</td>
-        <td>${d.total_pages || '-'}</td>
+        <td${failTip}>${statusHtml}</td>
         <td class="hint">${time}</td>
         <td><button class="danger" onclick="deleteDoc('${d.id}')">删除</button></td>
       `;
       tbody.appendChild(tr);
     });
+    // 有文档在处理中就持续轮询，全部结束后停止
+    if (hasProcessing) startDocPolling(); else stopDocPolling();
   } catch (e) { console.error(e); }
+}
+
+function startDocPolling() {
+  if (docPollTimer) return;
+  docPollTimer = setInterval(loadDocuments, 2000);
+}
+function stopDocPolling() {
+  if (docPollTimer) { clearInterval(docPollTimer); docPollTimer = null; }
 }
 
 // 拖拽上传
@@ -650,9 +671,13 @@ async function handleFile(file) {
   form.append('file', file);
   uz.querySelector('p').innerHTML = `上传中: <strong>${file.name}</strong> ...`;
   try {
-    await api('POST', '/ingest', form, true);
-    uz.querySelector('p').innerHTML = `✅ <strong>${file.name}</strong> 入库成功`;
-    await loadDocuments();
+    const r = await api('POST', '/ingest', form, true);
+    if (r.status === 'completed') {
+      uz.querySelector('p').innerHTML = `✅ <strong>${file.name}</strong> 入库成功（内容复用）`;
+    } else {
+      uz.querySelector('p').innerHTML = `⏳ <strong>${file.name}</strong> 已接收，后台处理中...`;
+    }
+    await loadDocuments();  // 立即刷新出 processing 状态，轮询会自动接管
   } catch (e) {
     uz.querySelector('p').innerHTML = `❌ 上传失败: ${e.message}`;
   }
