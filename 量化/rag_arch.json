@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "mode": "architecture",
+  "template_type": "architecture",
+  "style": 1,
+  "quality_profile": "showcase",
+  "width": 1200,
+  "height": 1020,
+  "title": "RAG 文档问答系统架构",
+  "subtitle": "Hybrid Retrieval · Rerank · Streaming Q&A with Multi-tenant Isolation",
+  "containers": [
+    { "id": "client", "x": 40, "y": 100, "width": 1120, "height": 90, "label": "Client" },
+    { "id": "api", "x": 40, "y": 210, "width": 1120, "height": 110, "label": "API Layer · rag-api (FastAPI)" },
+    { "id": "ingest", "x": 40, "y": 340, "width": 510, "height": 225, "label": "Ingestion Pipeline" },
+    { "id": "rag", "x": 570, "y": 340, "width": 510, "height": 225, "label": "RAG Retrieval Pipeline" },
+    { "id": "storage", "x": 40, "y": 595, "width": 1120, "height": 160, "label": "Storage & External Services" }
+  ],
+  "nodes": [
+    { "id": "browser", "kind": "user_avatar", "x": 70, "y": 120, "width": 180, "height": 50, "label": "浏览器前端", "sublabel": "index.html", "fill": "#eff6ff", "stroke": "#3b82f6", "flat": true },
+    { "id": "api_svc", "kind": "double_rect", "x": 440, "y": 235, "width": 320, "height": 60, "label": "rag-api · FastAPI", "sublabel": "JWT · 多租户隔离", "fill": "#faf5ff", "stroke": "#8b5cf6", "flat": true },
+
+    { "id": "parser", "kind": "rect", "x": 60, "y": 390, "width": 130, "height": 56, "label": "文档解析", "sublabel": "docling", "fill": "#fff7ed", "stroke": "#f97316", "flat": true },
+    { "id": "chunker", "kind": "rect", "x": 230, "y": 390, "width": 130, "height": 56, "label": "分块", "sublabel": "跨页表 merge", "fill": "#fff7ed", "stroke": "#f97316", "flat": true },
+    { "id": "embed_ingest", "kind": "rect", "x": 400, "y": 390, "width": 130, "height": 56, "label": "Embedding", "sublabel": "1024-dim", "fill": "#fef2f2", "stroke": "#ef4444", "flat": true },
+    { "id": "dedup", "kind": "rect", "x": 60, "y": 486, "width": 130, "height": 56, "label": "SHA-256 去重", "sublabel": "跨用户共享", "fill": "#ffffff", "stroke": "#cbd5e1", "flat": true },
+    { "id": "fts", "kind": "rect", "x": 230, "y": 486, "width": 130, "height": 56, "label": "BM25 索引", "sublabel": "PostgreSQL FTS", "fill": "#ffffff", "stroke": "#cbd5e1", "flat": true },
+    { "id": "write_db", "kind": "rect", "x": 400, "y": 486, "width": 130, "height": 56, "label": "写入存储", "sublabel": "向量 + 元数据", "fill": "#ecfdf5", "stroke": "#10b981", "flat": true },
+
+    { "id": "cache", "kind": "rect", "x": 590, "y": 390, "width": 130, "height": 56, "label": "问答缓存", "sublabel": "TTL+LRU", "fill": "#ffffff", "stroke": "#cbd5e1", "flat": true },
+    { "id": "vector_ret", "kind": "rect", "x": 760, "y": 390, "width": 130, "height": 56, "label": "向量召回", "sublabel": "top_k=10", "fill": "#ecfdf5", "stroke": "#10b981", "flat": true },
+    { "id": "bm25_ret", "kind": "rect", "x": 930, "y": 390, "width": 130, "height": 56, "label": "BM25 召回", "sublabel": "top_k=15", "fill": "#ffffff", "stroke": "#cbd5e1", "flat": true },
+    { "id": "rrf", "kind": "double_rect", "x": 590, "y": 486, "width": 130, "height": 56, "label": "RRF 融合", "sublabel": "混合检索", "fill": "#faf5ff", "stroke": "#8b5cf6", "flat": true },
+    { "id": "rerank", "kind": "rect", "x": 760, "y": 486, "width": 130, "height": 56, "label": "Rerank", "sublabel": "qwen3-rerank", "fill": "#fef2f2", "stroke": "#ef4444", "flat": true },
+    { "id": "llm", "kind": "double_rect", "x": 930, "y": 486, "width": 130, "height": 56, "label": "LLM 生成", "sublabel": "qwen3.7-plus", "fill": "#fef2f2", "stroke": "#ef4444", "flat": true },
+
+    { "id": "pg", "kind": "cylinder", "x": 80, "y": 630, "width": 200, "height": 85, "label": "PostgreSQL 16", "sublabel": "chunk · FTS · users", "fill": "#dbeafe", "stroke": "#2563eb" },
+    { "id": "qdrant", "kind": "cylinder", "x": 320, "y": 630, "width": 200, "height": 85, "label": "Qdrant", "sublabel": "HNSW · payload 多租户", "fill": "#dcfce7", "stroke": "#16a34a" },
+    { "id": "dashscope", "kind": "rect", "x": 560, "y": 630, "width": 280, "height": 85, "label": "DashScope API", "sublabel": "Embedding · Rerank · Chat", "fill": "#fee2e2", "stroke": "#dc2626", "flat": true }
+  ],
+  "arrows": [
+    { "id": "a1", "source": "browser", "target": "api_svc", "flow": "control" },
+    { "id": "a2", "source": "parser", "target": "chunker", "flow": "data" },
+    { "id": "a3", "source": "chunker", "target": "embed_ingest", "flow": "data" },
+    { "id": "a4", "source": "dedup", "target": "fts", "flow": "data" },
+    { "id": "a5", "source": "fts", "target": "write_db", "flow": "write" },
+    { "id": "a6", "source": "embed_ingest", "target": "write_db", "flow": "write" },
+    { "id": "a7", "source": "cache", "target": "vector_ret", "flow": "read" },
+    { "id": "a8", "source": "vector_ret", "target": "rrf", "flow": "read" },
+    { "id": "a10", "source": "rrf", "target": "rerank", "flow": "control" },
+    { "id": "a11", "source": "rerank", "target": "llm", "flow": "control" }
+  ],
+  "legend_orientation": "horizontal",
+  "legend_x": 48,
+  "legend_y": 810,
+  "legend_locked": true,
+  "legend": [
+    { "flow": "control", "label": "控制流" },
+    { "flow": "data", "label": "数据流" },
+    { "flow": "write", "label": "写入存储" },
+    { "flow": "read", "label": "读取检索" }
+  ],
+  "footer": "Style 1 · Flat Icon · rag_project",
+  "footer_x": 910,
+  "footer_y": 990
+}

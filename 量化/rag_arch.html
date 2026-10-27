@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:">
+  <title>rag_arch</title>
+  <style>
+    :root { color-scheme: dark; --page:#0f0f1a; --panel:#0f172a; --border:#334155; --text:#e2e8f0; --muted:#94a3b8; --accent:#a855f7; }
+    html[data-theme="light"] { color-scheme:light; --page:#f8fafc; --panel:#fff; --border:#cbd5e1; --text:#0f172a; --muted:#475569; --accent:#7c3aed; }
+    * { box-sizing:border-box; }
+    html,body { width:100%; height:100%; margin:0; overflow:hidden; background:linear-gradient(135deg,var(--page),#1a1a2e); color:var(--text); font-family:'SF Mono','Fira Code',ui-monospace,monospace; }
+    body { display:grid; grid-template-rows:auto 1fr; }
+    .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 14px; background:color-mix(in srgb,var(--panel) 92%,transparent); border-bottom:1px solid var(--border); z-index:2; }
+    .title { margin-right:auto; font-size:13px; font-weight:700; }
+    button,select { min-height:34px; padding:6px 10px; color:var(--text); background:var(--panel); border:1px solid var(--border); border-radius:8px; font:inherit; cursor:pointer; }
+    button:hover,button:focus-visible,select:focus-visible { border-color:var(--accent); outline:2px solid color-mix(in srgb,var(--accent) 35%,transparent); outline-offset:1px; }
+    #stage { position:relative; overflow:hidden; touch-action:none; cursor:grab; }
+    #stage.dragging { cursor:grabbing; }
+    #canvas { width:100%; height:100%; display:grid; place-items:center; transform-origin:0 0; will-change:transform; }
+    #canvas svg { max-width:calc(100vw - 40px); max-height:calc(100vh - 92px); width:auto; height:auto; filter:drop-shadow(0 22px 60px rgba(0,0,0,.28)); user-select:none; }
+    #status { min-width:76px; color:var(--muted); font-size:12px; text-align:center; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; } }
+  </style>
+</head>
+<body>
+  <header class="toolbar" aria-label="Diagram controls">
+    <span class="title">rag_arch</span>
+    <button type="button" data-action="zoom-out" aria-label="Zoom out">−</button>
+    <button type="button" data-action="reset" aria-label="Reset view">Reset</button>
+    <button type="button" data-action="zoom-in" aria-label="Zoom in">+</button>
+    <span id="status" aria-live="polite">100%</span>
+    <button type="button" data-action="theme" aria-label="Toggle theme">Theme</button>
+    <button type="button" data-action="copy" aria-label="Copy SVG source">Copy SVG</button>
+    <select id="scale" aria-label="Raster export scale"><option value="1">1×</option><option value="2" selected>2×</option><option value="3">3×</option><option value="4">4×</option></select>
+    <select id="format" aria-label="Export format"><option>SVG</option><option>PNG</option><option>JPEG</option><option>WebP</option></select>
+    <button type="button" data-action="download">Export</button>
+  </header>
+  <main id="stage" tabindex="0" aria-label="Interactive diagram. Drag to pan; use plus and minus to zoom.">
+    <div id="canvas"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1020" width="1200" height="1020" data-generator="fireworks-tech-graph" data-schema-version="1" data-text-metrics="heuristic-v1" data-style-id="1" data-visual-theme="Flat Icon" data-diagram-type="architecture" data-motion-scene="" data-semantic-profile="generic" data-semantic-valid="true" data-quality-profile="showcase" data-max-bends-per-edge="2" data-max-total-bends="8" data-max-route-stretch="1.35" data-max-bridged-crossings="0" data-min-node-gap="40.0" data-min-container-gutter="20.0" data-min-label-clearance="4.0" data-min-segment-length="16.0" role="img" focusable="false">
+  <defs>
+    <marker id="arrowA" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed" />
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981" />
+    </marker>
+    <marker id="arrowC" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb" />
+    </marker>
+    <marker id="arrowE" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f97316" />
+    </marker>
+    <marker id="arrowF" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed" />
+    </marker>
+    <marker id="arrowG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
+    </marker>
+    <marker id="arrowH" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280" />
+    </marker>
+    <filter id="shadowSoft" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.12" />
+    </filter>
+    <filter id="shadowGlass" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#020617" flood-opacity="0.28" />
+    </filter>
+    <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }
+    .title { font-size: 30px; font-weight: 700; fill: #111827; }
+    .subtitle { font-size: 14px; font-weight: 500; fill: #6b7280; }
+    .section { font-size: 13px; font-weight: 700; fill: #2563eb; letter-spacing: 1.4px; }
+    .section-sub { font-size: 12px; font-weight: 500; fill: #64748b; }
+    .node-title { font-weight: 700; fill: #111827; }
+    .node-sub { font-weight: 500; fill: #6b7280; }
+    .node-type { font-size: 12px; font-weight: 700; fill: #64748b; letter-spacing: 0.08em; }
+    .arrow-label { font-size: 12px; font-weight: 600; fill: #6b7280; }
+    .legend { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .footnote { font-size: 12px; font-weight: 500; fill: #64748b; }
+    .metric-label { font-size: 8.5px; font-weight: 700; fill: #64748b; text-transform: uppercase; }
+    .metric-value { font-size: 9.5px; font-weight: 700; fill: #111827; }
+    </style>
+  </defs>
+  <rect data-graph-role="background" width="1200.0" height="1020.0" fill="#ffffff" />
+  <text x="600.0" y="56" text-anchor="middle" class="title">RAG 文档问答系统架构</text>
+  <text x="600.0" y="82" text-anchor="middle" class="subtitle">Hybrid Retrieval · Rerank · Streaming Q&amp;A with Multi-tenant Isolation</text>
+  <g id="client" data-graph-role="container" data-container-id="client" data-semantic-role="boundary" data-graph-bounds="40,100,1160,190">
+  <rect data-graph-role="container" x="40.0" y="100.0" width="1120.0" height="90.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5" />
+  <text x="58.0" y="124.0" class="section">CLIENT</text>
+    <rect id="client-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="106" width="71.86" height="30" fill="none" stroke="none" />
+  </g>
+  <g id="api" data-graph-role="container" data-container-id="api" data-semantic-role="boundary" data-graph-bounds="40,210,1160,320">
+  <rect data-graph-role="container" x="40.0" y="210.0" width="1120.0" height="110.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5" />
+  <text x="58.0" y="234.0" class="section">API LAYER · RAG-API (FASTAPI)</text>
+    <rect id="api-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="216" width="227.08" height="30" fill="none" stroke="none" />
+  </g>
+  <g id="ingest" data-graph-role="container" data-container-id="ingest" data-semantic-role="boundary" data-graph-bounds="40,340,550,565">
+  <rect data-graph-role="container" x="40.0" y="340.0" width="510.0" height="225.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5" />
+  <text x="58.0" y="364.0" class="section">INGESTION PIPELINE</text>
+    <rect id="ingest-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="346" width="149.34" height="30" fill="none" stroke="none" />
+  </g>
+  <g id="rag" data-graph-role="container" data-container-id="rag" data-semantic-role="boundary" data-graph-bounds="570,340,1080,565">
+  <rect data-graph-role="container" x="570.0" y="340.0" width="510.0" height="225.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5" />
+  <text x="588.0" y="364.0" class="section">RAG RETRIEVAL PIPELINE</text>
+    <rect id="rag-header" data-graph-role="reserved" data-reserved-kind="container-header" x="578" y="346" width="180.02" height="30" fill="none" stroke="none" />
+  </g>
+  <g id="storage" data-graph-role="container" data-container-id="storage" data-semantic-role="boundary" data-graph-bounds="40,595,1160,755">
+  <rect data-graph-role="container" x="40.0" y="595.0" width="1120.0" height="160.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5" />
+  <text x="58.0" y="619.0" class="section">STORAGE &amp; EXTERNAL SERVICES</text>
+    <rect id="storage-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="601" width="224.74" height="30" fill="none" stroke="none" />
+  </g>
+  <path id="a1" data-graph-role="edge" data-edge-id="a1" data-source="browser" data-target="api_svc" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="1" data-route-stretch="1.0" data-bridges="" d="M 250,145 L 600,145 L 600,235" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)" />
+  <path id="a2" data-graph-role="edge" data-edge-id="a2" data-source="parser" data-target="chunker" data-edge-kind="flow" data-topic-id="" data-flow="data" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 190,418 L 230,418" fill="none" stroke="#f97316" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowE)" />
+  <path id="a3" data-graph-role="edge" data-edge-id="a3" data-source="chunker" data-target="embed_ingest" data-edge-kind="flow" data-topic-id="" data-flow="data" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 360,418 L 400,418" fill="none" stroke="#f97316" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowE)" />
+  <path id="a4" data-graph-role="edge" data-edge-id="a4" data-source="dedup" data-target="fts" data-edge-kind="flow" data-topic-id="" data-flow="data" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 190,514 L 230,514" fill="none" stroke="#f97316" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowE)" />
+  <path id="a5" data-graph-role="edge" data-edge-id="a5" data-source="fts" data-target="write_db" data-edge-kind="flow" data-topic-id="" data-flow="write" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 360,514 L 400,514" fill="none" stroke="#10b981" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowB)" />
+  <path id="a6" data-graph-role="edge" data-edge-id="a6" data-source="embed_ingest" data-target="write_db" data-edge-kind="flow" data-topic-id="" data-flow="write" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 465,446 L 465,486" fill="none" stroke="#10b981" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowB)" />
+  <path id="a7" data-graph-role="edge" data-edge-id="a7" data-source="cache" data-target="vector_ret" data-edge-kind="flow" data-topic-id="" data-flow="read" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 720,418 L 760,418" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowC)" />
+  <path id="a8" data-graph-role="edge" data-edge-id="a8" data-source="vector_ret" data-target="rrf" data-edge-kind="flow" data-topic-id="" data-flow="read" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="2" data-route-stretch="1.0" data-bridges="" d="M 825,446 L 825,462 L 655,462 L 655,486" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowC)" />
+  <path id="a10" data-graph-role="edge" data-edge-id="a10" data-source="rrf" data-target="rerank" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 720,514 L 760,514" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)" />
+  <path id="a11" data-graph-role="edge" data-edge-id="a11" data-source="rerank" data-target="llm" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 890,514 L 930,514" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)" />
+  <g id="node-browser" data-graph-role="node" data-node-id="browser" data-semantic-role="user_avatar" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="70,120,250,170">
+  <rect x="70.0" y="120.0" width="180.0" height="50.0" rx="10.0" fill="#eff6ff" stroke="#3b82f6" stroke-width="2.0" />
+  <circle cx="96.0" cy="145.0" r="18" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.6" />
+  <circle cx="96.0" cy="139.0" r="5" fill="#3b82f6" />
+  <path d="M 86.0 156.0 Q 96.0 147.0 106.0 156.0" fill="none" stroke="#3b82f6" stroke-width="2" />
+  <text data-text-role="title" data-full-text="浏览器前端" data-text-max-width="104.0" x="134.0" y="151.0" text-anchor="start" class="node-title" font-size="18">浏览器前端</text>
+  <text data-text-role="subtitle" data-full-text="index.html" data-text-max-width="104.0" x="134.0" y="173.0" text-anchor="start" class="node-sub" font-size="12">index.html</text>
+  </g>
+  <g id="node-api_svc" data-graph-role="node" data-node-id="api_svc" data-semantic-role="double_rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="440,235,760,295">
+  <rect x="440.0" y="235.0" width="320.0" height="60.0" rx="10.0" fill="#faf5ff" stroke="#8b5cf6" stroke-width="2.0" />
+  <rect x="446.0" y="241.0" width="308.0" height="48.0" rx="7.0" fill="none" stroke="#8b5cf6" stroke-width="1.2" opacity="0.65" />
+  <text data-text-role="title" data-full-text="rag-api · FastAPI" data-text-max-width="288.0" x="600.0" y="265.0" text-anchor="middle" class="node-title" font-size="18">rag-api · FastAPI</text>
+  <text data-text-role="subtitle" data-full-text="JWT · 多租户隔离" data-text-max-width="288.0" x="600.0" y="287.0" text-anchor="middle" class="node-sub" font-size="12">JWT · 多租户隔离</text>
+  </g>
+  <g id="node-parser" data-graph-role="node" data-node-id="parser" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="60,390,190,446">
+  <rect x="60.0" y="390.0" width="130.0" height="56.0" rx="10.0" fill="#fff7ed" stroke="#f97316" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="文档解析" data-text-max-width="106.0" x="125.0" y="418.0" text-anchor="middle" class="node-title" font-size="18">文档解析</text>
+  <text data-text-role="subtitle" data-full-text="docling" data-text-max-width="106.0" x="125.0" y="440.0" text-anchor="middle" class="node-sub" font-size="12">docling</text>
+  </g>
+  <g id="node-chunker" data-graph-role="node" data-node-id="chunker" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="230,390,360,446">
+  <rect x="230.0" y="390.0" width="130.0" height="56.0" rx="10.0" fill="#fff7ed" stroke="#f97316" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="分块" data-text-max-width="106.0" x="295.0" y="418.0" text-anchor="middle" class="node-title" font-size="18">分块</text>
+  <text data-text-role="subtitle" data-full-text="跨页表 merge" data-text-max-width="106.0" x="295.0" y="440.0" text-anchor="middle" class="node-sub" font-size="12">跨页表 merge</text>
+  </g>
+  <g id="node-embed_ingest" data-graph-role="node" data-node-id="embed_ingest" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="400,390,530,446">
+  <rect x="400.0" y="390.0" width="130.0" height="56.0" rx="10.0" fill="#fef2f2" stroke="#ef4444" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="Embedding" data-text-max-width="106.0" x="465.0" y="418.0" text-anchor="middle" class="node-title" font-size="18">Embedding</text>
+  <text data-text-role="subtitle" data-full-text="1024-dim" data-text-max-width="106.0" x="465.0" y="440.0" text-anchor="middle" class="node-sub" font-size="12">1024-dim</text>
+  </g>
+  <g id="node-dedup" data-graph-role="node" data-node-id="dedup" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="60,486,190,542">
+  <rect x="60.0" y="486.0" width="130.0" height="56.0" rx="10.0" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="SHA-256 去重" data-text-max-width="106.0" x="125.0" y="514.0" text-anchor="middle" class="node-title" font-size="15.28">SHA-256 去重</text>
+  <text data-text-role="subtitle" data-full-text="跨用户共享" data-text-max-width="106.0" x="125.0" y="536.0" text-anchor="middle" class="node-sub" font-size="12">跨用户共享</text>
+  </g>
+  <g id="node-fts" data-graph-role="node" data-node-id="fts" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="230,486,360,542">
+  <rect x="230.0" y="486.0" width="130.0" height="56.0" rx="10.0" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="BM25 索引" data-text-max-width="106.0" x="295.0" y="514.0" text-anchor="middle" class="node-title" font-size="18">BM25 索引</text>
+  <text data-text-role="subtitle" data-full-text="PostgreSQL FTS" data-text-max-width="106.0" x="295.0" y="536.0" text-anchor="middle" class="node-sub" font-size="12">PostgreSQL FTS</text>
+  </g>
+  <g id="node-write_db" data-graph-role="node" data-node-id="write_db" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="400,486,530,542">
+  <rect x="400.0" y="486.0" width="130.0" height="56.0" rx="10.0" fill="#ecfdf5" stroke="#10b981" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="写入存储" data-text-max-width="106.0" x="465.0" y="514.0" text-anchor="middle" class="node-title" font-size="18">写入存储</text>
+  <text data-text-role="subtitle" data-full-text="向量 + 元数据" data-text-max-width="106.0" x="465.0" y="536.0" text-anchor="middle" class="node-sub" font-size="12">向量 + 元数据</text>
+  </g>
+  <g id="node-cache" data-graph-role="node" data-node-id="cache" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="590,390,720,446">
+  <rect x="590.0" y="390.0" width="130.0" height="56.0" rx="10.0" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="问答缓存" data-text-max-width="106.0" x="655.0" y="418.0" text-anchor="middle" class="node-title" font-size="18">问答缓存</text>
+  <text data-text-role="subtitle" data-full-text="TTL+LRU" data-text-max-width="106.0" x="655.0" y="440.0" text-anchor="middle" class="node-sub" font-size="12">TTL+LRU</text>
+  </g>
+  <g id="node-vector_ret" data-graph-role="node" data-node-id="vector_ret" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="760,390,890,446">
+  <rect x="760.0" y="390.0" width="130.0" height="56.0" rx="10.0" fill="#ecfdf5" stroke="#10b981" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="向量召回" data-text-max-width="106.0" x="825.0" y="418.0" text-anchor="middle" class="node-title" font-size="18">向量召回</text>
+  <text data-text-role="subtitle" data-full-text="top_k=10" data-text-max-width="106.0" x="825.0" y="440.0" text-anchor="middle" class="node-sub" font-size="12">top_k=10</text>
+  </g>
+  <g id="node-bm25_ret" data-graph-role="node" data-node-id="bm25_ret" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="930,390,1060,446">
+  <rect x="930.0" y="390.0" width="130.0" height="56.0" rx="10.0" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="BM25 召回" data-text-max-width="106.0" x="995.0" y="418.0" text-anchor="middle" class="node-title" font-size="18">BM25 召回</text>
+  <text data-text-role="subtitle" data-full-text="top_k=15" data-text-max-width="106.0" x="995.0" y="440.0" text-anchor="middle" class="node-sub" font-size="12">top_k=15</text>
+  </g>
+  <g id="node-rrf" data-graph-role="node" data-node-id="rrf" data-semantic-role="double_rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="590,486,720,542">
+  <rect x="590.0" y="486.0" width="130.0" height="56.0" rx="10.0" fill="#faf5ff" stroke="#8b5cf6" stroke-width="2.0" />
+  <rect x="596.0" y="492.0" width="118.0" height="44.0" rx="7.0" fill="none" stroke="#8b5cf6" stroke-width="1.2" opacity="0.65" />
+  <text data-text-role="title" data-full-text="RRF 融合" data-text-max-width="98.0" x="655.0" y="514.0" text-anchor="middle" class="node-title" font-size="18">RRF 融合</text>
+  <text data-text-role="subtitle" data-full-text="混合检索" data-text-max-width="98.0" x="655.0" y="536.0" text-anchor="middle" class="node-sub" font-size="12">混合检索</text>
+  </g>
+  <g id="node-rerank" data-graph-role="node" data-node-id="rerank" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="760,486,890,542">
+  <rect x="760.0" y="486.0" width="130.0" height="56.0" rx="10.0" fill="#fef2f2" stroke="#ef4444" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="Rerank" data-text-max-width="106.0" x="825.0" y="514.0" text-anchor="middle" class="node-title" font-size="18">Rerank</text>
+  <text data-text-role="subtitle" data-full-text="qwen3-rerank" data-text-max-width="106.0" x="825.0" y="536.0" text-anchor="middle" class="node-sub" font-size="12">qwen3-rerank</text>
+  </g>
+  <g id="node-llm" data-graph-role="node" data-node-id="llm" data-semantic-role="double_rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="930,486,1060,542">
+  <rect x="930.0" y="486.0" width="130.0" height="56.0" rx="10.0" fill="#fef2f2" stroke="#ef4444" stroke-width="2.0" />
+  <rect x="936.0" y="492.0" width="118.0" height="44.0" rx="7.0" fill="none" stroke="#ef4444" stroke-width="1.2" opacity="0.65" />
+  <text data-text-role="title" data-full-text="LLM 生成" data-text-max-width="98.0" x="995.0" y="514.0" text-anchor="middle" class="node-title" font-size="18">LLM 生成</text>
+  <text data-text-role="subtitle" data-full-text="qwen3.7-plus" data-text-max-width="98.0" x="995.0" y="536.0" text-anchor="middle" class="node-sub" font-size="12">qwen3.7-plus</text>
+  </g>
+  <g id="node-pg" data-graph-role="node" data-node-id="pg" data-semantic-role="cylinder" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="80,630,280,715">
+  <ellipse cx="180.0" cy="640.625" rx="100.0" ry="10.625" fill="#dbeafe" stroke="#2563eb" stroke-width="2.2" />
+  <rect x="80.0" y="640.625" width="200.0" height="63.75" fill="#dbeafe" stroke="#2563eb" stroke-width="2.2" />
+  <ellipse cx="180.0" cy="704.375" rx="100.0" ry="10.625" fill="#dbeafe" stroke="#2563eb" stroke-width="2.2" />
+  <ellipse cx="180.0" cy="662.3" rx="100.0" ry="10.625" fill="none" stroke="#2563eb" stroke-opacity="0.45" stroke-width="1.2" />
+  <ellipse cx="180.0" cy="681.0" rx="100.0" ry="10.625" fill="none" stroke="#2563eb" stroke-opacity="0.25" stroke-width="1.2" />
+  <text data-text-role="title" data-full-text="PostgreSQL 16" data-text-max-width="176.0" x="180.0" y="666.5" text-anchor="middle" class="node-title" font-size="18">PostgreSQL 16</text>
+  <text data-text-role="subtitle" data-full-text="chunk · FTS · users" data-text-max-width="176.0" x="180.0" y="690.5" text-anchor="middle" class="node-sub" font-size="12">chunk · FTS · users</text>
+  </g>
+  <g id="node-qdrant" data-graph-role="node" data-node-id="qdrant" data-semantic-role="cylinder" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="320,630,520,715">
+  <ellipse cx="420.0" cy="640.625" rx="100.0" ry="10.625" fill="#dcfce7" stroke="#16a34a" stroke-width="2.2" />
+  <rect x="320.0" y="640.625" width="200.0" height="63.75" fill="#dcfce7" stroke="#16a34a" stroke-width="2.2" />
+  <ellipse cx="420.0" cy="704.375" rx="100.0" ry="10.625" fill="#dcfce7" stroke="#16a34a" stroke-width="2.2" />
+  <ellipse cx="420.0" cy="662.3" rx="100.0" ry="10.625" fill="none" stroke="#16a34a" stroke-opacity="0.45" stroke-width="1.2" />
+  <ellipse cx="420.0" cy="681.0" rx="100.0" ry="10.625" fill="none" stroke="#16a34a" stroke-opacity="0.25" stroke-width="1.2" />
+  <text data-text-role="title" data-full-text="Qdrant" data-text-max-width="176.0" x="420.0" y="666.5" text-anchor="middle" class="node-title" font-size="18">Qdrant</text>
+  <text data-text-role="subtitle" data-full-text="HNSW · payload 多租户" data-text-max-width="176.0" x="420.0" y="690.5" text-anchor="middle" class="node-sub" font-size="12">HNSW · payload 多租户</text>
+  </g>
+  <g id="node-dashscope" data-graph-role="node" data-node-id="dashscope" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="560,630,840,715">
+  <rect x="560.0" y="630.0" width="280.0" height="85.0" rx="10.0" fill="#fee2e2" stroke="#dc2626" stroke-width="1.8" />
+  <text data-text-role="title" data-full-text="DashScope API" data-text-max-width="256.0" x="700.0" y="672.5" text-anchor="middle" class="node-title" font-size="18">DashScope API</text>
+  <text data-text-role="subtitle" data-full-text="Embedding · Rerank · Chat" data-text-max-width="256.0" x="700.0" y="694.5" text-anchor="middle" class="node-sub" font-size="12">Embedding · Rerank · Chat</text>
+  </g>
+  <g id="legend" data-graph-role="legend">
+    <rect id="legend-zone" data-graph-role="reserved" data-reserved-kind="legend" x="38" y="796" width="442" height="46" rx="10" fill="none" stroke="none" />
+    <line data-graph-role="decoration" x1="48.0" y1="810.0" x2="78.0" y2="810.0" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)" />
+    <text data-graph-role="decoration" x="88.0" y="814.0" class="legend">控制流</text>
+    <line data-graph-role="decoration" x1="152.0" y1="810.0" x2="182.0" y2="810.0" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)" />
+    <text data-graph-role="decoration" x="192.0" y="814.0" class="legend">数据流</text>
+    <line data-graph-role="decoration" x1="256.0" y1="810.0" x2="286.0" y2="810.0" stroke="#10b981" stroke-width="2.4" marker-end="url(#arrowB)" />
+    <text data-graph-role="decoration" x="296.0" y="814.0" class="legend">写入存储</text>
+    <line data-graph-role="decoration" x1="372.0" y1="810.0" x2="402.0" y2="810.0" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowC)" />
+    <text data-graph-role="decoration" x="412.0" y="814.0" class="legend">读取检索</text>
+  </g>
+  <g id="footer" data-graph-role="reserved" data-graph-bounds="910,978,1141,994">
+  <text x="910.0" y="990.0" class="footnote">Style 1 · Flat Icon · rag_project</text>
+  </g>
+</svg></div>
+    <p class="sr-only">Keyboard shortcuts: plus and minus zoom, zero resets, T toggles theme, S exports.</p>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const metadata = {"slug": "rag_arch"};
+    const stage = document.getElementById('stage');
+    const canvas = document.getElementById('canvas');
+    const svg = canvas.querySelector('svg');
+    const status = document.getElementById('status');
+    const scaleSelect = document.getElementById('scale');
+    const formatSelect = document.getElementById('format');
+    let view = { x:0, y:0, scale:1 };
+    let drag = null;
+    const clamp = value => Math.max(.2, Math.min(8, value));
+    const render = () => {
+      canvas.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.scale})`;
+      status.textContent = `${Math.round(view.scale * 100)}%`;
+    };
+    const zoom = (factor, originX=stage.clientWidth/2, originY=stage.clientHeight/2) => {
+      const next = clamp(view.scale * factor);
+      const ratio = next / view.scale;
+      view.x = originX - (originX - view.x) * ratio;
+      view.y = originY - (originY - view.y) * ratio;
+      view.scale = next; render();
+    };
+    const reset = () => { view = {x:0,y:0,scale:1}; render(); };
+    stage.addEventListener('wheel', event => { event.preventDefault(); const rect=stage.getBoundingClientRect(); zoom(event.deltaY < 0 ? 1.12 : .89, event.clientX-rect.left, event.clientY-rect.top); }, {passive:false});
+    stage.addEventListener('pointerdown', event => { drag={id:event.pointerId,x:event.clientX,y:event.clientY,vx:view.x,vy:view.y}; stage.setPointerCapture(event.pointerId); stage.classList.add('dragging'); });
+    stage.addEventListener('pointermove', event => { if(!drag||drag.id!==event.pointerId)return; view.x=drag.vx+event.clientX-drag.x; view.y=drag.vy+event.clientY-drag.y; render(); });
+    const endDrag = () => { drag=null; stage.classList.remove('dragging'); };
+    stage.addEventListener('pointerup', endDrag); stage.addEventListener('pointercancel', endDrag);
+    const source = () => new XMLSerializer().serializeToString(svg);
+    const saveBlob = (blob, extension) => { const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${(metadata.slug||'fireworks-tech-graph')}.${extension}`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); };
+    const copySource = async () => {
+      const value=source();
+      try { await navigator.clipboard.writeText(value); status.textContent='Copied'; return; } catch {}
+      const area=document.createElement('textarea'); area.value=value; area.setAttribute('readonly',''); area.style.position='fixed'; area.style.opacity='0'; document.body.appendChild(area); area.select();
+      status.textContent=document.execCommand('copy')?'Copied':'Copy failed'; area.remove();
+    };
+    const exportDiagram = async () => {
+      const format = formatSelect.value.toLowerCase();
+      if(format==='svg') { saveBlob(new Blob([source()],{type:'image/svg+xml;charset=utf-8'}),'svg'); return; }
+      const scale = Math.max(1,Math.min(4,Number(scaleSelect.value)||2));
+      const box = svg.viewBox.baseVal; const width=box.width||svg.clientWidth; const height=box.height||svg.clientHeight;
+      const image = new Image(); const url=URL.createObjectURL(new Blob([source()],{type:'image/svg+xml'}));
+      await new Promise((resolve,reject)=>{ image.onload=resolve; image.onerror=reject; image.src=url; });
+      const raster=document.createElement('canvas'); raster.width=Math.round(width*scale); raster.height=Math.round(height*scale);
+      const ctx=raster.getContext('2d'); if(format==='jpeg'){ctx.fillStyle='#ffffff';ctx.fillRect(0,0,raster.width,raster.height);} ctx.drawImage(image,0,0,raster.width,raster.height); URL.revokeObjectURL(url);
+      const mime=format==='jpeg'?'image/jpeg':format==='webp'?'image/webp':'image/png';
+      const blob=await new Promise(resolve=>raster.toBlob(resolve,mime,.94)); if(blob) saveBlob(blob,format==='jpeg'?'jpg':format);
+    };
+    document.querySelector('.toolbar').addEventListener('click', async event => {
+      const action=event.target.closest('[data-action]')?.dataset.action; if(!action)return;
+      if(action==='zoom-in')zoom(1.2); else if(action==='zoom-out')zoom(.83); else if(action==='reset')reset();
+      else if(action==='theme')document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';
+      else if(action==='download')await exportDiagram();
+      else if(action==='copy') await copySource();
+    });
+    document.addEventListener('keydown', event => {
+      if(event.target.matches('select'))return;
+      if(event.key==='+'||event.key==='=')zoom(1.2); else if(event.key==='-')zoom(.83); else if(event.key==='0'||event.key.toLowerCase()==='r')reset();
+      else if(event.key.toLowerCase()==='t')document.querySelector('[data-action=theme]').click(); else if(event.key.toLowerCase()==='s'){event.preventDefault();exportDiagram();}
+    });
+    render();
+  })();
+  </script>
+</body>
+</html>
