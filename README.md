@@ -1,10 +1,10 @@
 # 📄 RAG 文档处理管线
 
-> 把 PDF / Word / Markdown / HTML / TXT 转成结构化 markdown，切成语义完整的检索块，向量化后存入 Qdrant，业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
+> 把 PDF / Word / Markdown / HTML / TXT 转成结构化 markdown，切成语义完整的检索块，向量化后存入 Qdrant；JSON 按记录切块、只建 PostgreSQL 倒排索引。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.162%2B-009688)](https://fastapi.tiangolo.com/)
-[![Formats](https://img.shields.io/badge/formats-PDF%20%7C%20DOCX%20%7C%20MD%20%7C%20HTML%20%7C%20TXT-orange)]()
+[![Formats](https://img.shields.io/badge/formats-PDF%20%7C%20DOCX%20%7C%20MD%20%7C%20HTML%20%7C%20TXT%20%7C%20JSON-orange)]()
 [![Vector DB](https://img.shields.io/badge/vector-Qdrant-purple)]()
 [![DB](https://img.shields.io/badge/db-PostgreSQL-blue)]()
 [![License](https://img.shields.io/badge/license-Unlicense-lightgrey)]()
@@ -13,7 +13,7 @@
 
 ## ✨ 功能特性
 
-- **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Markdown、HTML、TXT 一站式覆盖
+- **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Markdown、HTML、TXT、JSON 一站式覆盖
 - **智能分块**：段落优先的级联降级策略（段落 → 句子 → 字符），表格原子化、图片归属、章节路径溯源
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
 - **RAG 全链路**：入库（解析→分块→向量化）→ 混合召回（向量语义 + BM25 关键词 → RRF 融合）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
@@ -169,6 +169,7 @@ print(result.raw_text)      # 完整 markdown 文本
 | MD 解析    | `src/parsers/markdown_parser.py`             | 直接读 .md，复用清洗与分块逻辑                                     |
 | HTML 解析  | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退           |
 | TXT 解析   | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                       |
+| JSON 解析  | `src/parsers/json_parser.py`                 | 一条记录一个 chunk，字段名拆词，只走 BM25 倒排索引                 |
 | 表格处理   | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                       |
 | 清洗       | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                             |
 | 分块       | `src/parsers/chunker.py`                     | 段落优先的降级分块 + 章节路径 + 表格原子单元 + 图片归属            |
@@ -273,6 +274,21 @@ result = TXTParser().parse("test_file/xxx.txt")
 
 TXT 结构化弱，**不做标题入栈**，分块走段落策略（空行分段 → 句子 → 字符）。编码自动回退，无表格/图片。
 
+### JSONParser
+
+```python
+from src.parsers.json_parser import JSONParser
+
+result = JSONParser().parse("test_file/xxx.json")
+```
+
+JSON 结构强、字段名可精确匹配，**不走向量索引**（`INDEX_TYPE = "bm25"`），入库时跳过 embedding 和 Qdrant，只建 PG tsvector 倒排索引：
+
+- 顶层数组每个元素、顶层对象每个 key（对象数组按元素展开）各成一个 chunk，`section` 记录 JSON 路径（如 `users[3]`）
+- 字段渲染为 `key: value`；camelCase / snake_case 额外输出拆词形式（如 `errorCode (error code): E1024`），保证 BM25 能按词命中
+- 解析器直接产出 `chunks`，不再经 TextChunker 二次切分，避免多条记录挤进同一块稀释 `ts_rank`
+- 超过 1000 字符的记录按字段行继续切；嵌套深度、单值长度均有上限
+
 ### TextChunker
 
 ```python
@@ -337,6 +353,7 @@ query → embed → Qdrant.query_points(top_k=10, user_id 过滤) ─┐
 
 - 默认混合检索（向量 + BM25 + RRF 融合）；传 `use_bm25=False` 切换纯向量模式，用于评测 A/B 对比
 - BM25 覆盖向量对编号/专名/参数类精确查询的弱区，RRF 融合不依赖两路分数量纲（向量是余弦相似度、BM25 是 ts_rank），只看排名
+- JSON 文档不写 Qdrant，只能从 BM25 路召回；`use_bm25=False` 的纯向量模式下 JSON 不可见
 
 ### 问答（chat）
 
@@ -549,6 +566,7 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 | `python tests/test_markdown.py` | Markdown 解析 → 分块 → 写 `data/md_test/`    |
 | `python tests/test_html.py`     | HTML 解析 → 分块 → 写 `data/html_test/`      |
 | `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`        |
+| `python tests/test_json.py`     | JSON 解析：记录级分块、字段拆词、索引类型    |
 | `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理 |
 | `python tests/test_api.py`      | FastAPI 接口：health/parse/chunk/错误处理    |
 

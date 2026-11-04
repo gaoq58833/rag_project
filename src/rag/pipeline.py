@@ -19,7 +19,7 @@ from src.db.repository import (
 )
 from src.llm import llm_client
 from src.parsers.chunker import ChunkStrategy, TextChunker
-from src.parsers.factory import get_parser
+from src.parsers.factory import get_parser, index_type_for
 from src.vectorstore import vector_store
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
@@ -95,12 +95,16 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
     file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
     if existing is not None:
-        # 仅同一用户的相同内容才复用向量（跨用户不复用，保证 Qdrant user_id 过滤隔离）
+        # 仅同一用户的相同内容才复用（跨用户不复用，保证 Qdrant user_id 过滤隔离）
+        # 索引类型不同也不复用：JSON 只建倒排索引，普通文档有向量，不能共享同一批 chunk
         existing_id = existing["id"]
-        existing_chunks = ChunkRepository.get_by_document_id(existing_id)
+        same_index = index_type_for(existing["filename"]) == index_type_for(filename)
+        existing_chunks = ChunkRepository.get_by_document_id(existing_id) if same_index else []
 
+        if not same_index:
+            logger.info(f"Document {existing_id} uses different index type, skipping reuse")
         # 已有文档 chunks 为空（入库失败残留或正在处理中），不复用，走完整入库
-        if not existing_chunks:
+        elif not existing_chunks:
             logger.warning(f"Document {existing_id} has 0 chunks (processing or failed), skipping reuse")
         else:
             document_id = DocumentRepository.create(
@@ -161,14 +165,16 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
 
 
 def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: Optional[str] = None) -> None:
-    """异步入库（后台执行）：解析 → 分块 → 向量化 → 写 PG chunks + Qdrant → 更新状态
+    """异步入库（后台执行）：解析 → 分块 → 向量化/倒排索引 → 写 PG + Qdrant → 更新状态
 
+    JSON（INDEX_TYPE=bm25）只建 PG 倒排索引，跳过 embedding 与 Qdrant；
+    其他格式仍走原有的向量 + 倒排混合索引。
     向量只在全部处理完后才写入，所以检索天然不会搜到 processing 的半成品文档。
     失败时把文档置为 failed 并记录 error_msg，文档记录保留供用户看到失败原因。
 
     数据分工：
-      - PostgreSQL：完整 chunk 数据（content/section/type/images 等）
-      - Qdrant：向量 + 最小 payload（用于检索后回查 PG）
+      - PostgreSQL：完整 chunk 数据（content/section/type/images 等）+ tsv 倒排索引
+      - Qdrant：向量 + 最小 payload（用于检索后回查 PG）；仅 INDEX_TYPE=vector 的格式写入
     """
     try:
         # 文档可能在处理期间被用户删除：开始前检查一次
@@ -180,12 +186,12 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
         parser = get_parser(filename)
         result = parser.parse_from_bytes(file_bytes, filename)
 
-        # 2. 分块
-        chunks = DEFAULT_CHUNKER.split(result.raw_text)
+        # 2. 分块：解析器自带 chunks（JSON 按记录预分块）优先，否则走通用 chunker
+        chunks = result.chunks or DEFAULT_CHUNKER.split(result.raw_text)
 
-        # 3. 向量化 content（只向量化正文）
-        contents = [c["content"] for c in chunks]
-        embeddings = llm_client.embed(contents)
+        # 3. 向量化：JSON 只建倒排索引（PG tsv），跳过 embedding 和 Qdrant
+        use_vector = parser.INDEX_TYPE != "bm25"
+        embeddings = llm_client.embed([c["content"] for c in chunks]) if use_vector else None
 
         # 4. 构造 PG chunks 记录 + Qdrant points
         pg_chunks = []
@@ -193,7 +199,6 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
         qdrant_payloads = []
         for chunk in chunks:
             point_id = str(uuid.uuid4())
-            qdrant_ids.append(point_id)
             pg_chunks.append({
                 "document_id": document_id,
                 "qdrant_point_id": point_id,
@@ -205,17 +210,20 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
                 "images": chunk.get("images", []),
                 "tokens": tokenize(chunk["content"]),
             })
-            # Qdrant payload 只存最小信息，完整数据回 PG 查
-            qdrant_payloads.append({
-                "qdrant_point_id": point_id,
-                "filename": filename,
-                "section": chunk.get("section", ""),
-                "user_id": user_id,
-            })
+            if use_vector:
+                # Qdrant payload 只存最小信息，完整数据回 PG 查
+                qdrant_ids.append(point_id)
+                qdrant_payloads.append({
+                    "qdrant_point_id": point_id,
+                    "filename": filename,
+                    "section": chunk.get("section", ""),
+                    "user_id": user_id,
+                })
 
-        # 5. 写 PG chunks + Qdrant 向量（先 PG 后 Qdrant：PG 失败则 Qdrant 不会留孤儿向量）
+        # 5. 写 PG chunks（tsv 倒排索引在这里建立）；只有向量索引的格式才写 Qdrant
         ChunkRepository.bulk_insert(pg_chunks)
-        vector_store.upsert(qdrant_ids, embeddings, qdrant_payloads)
+        if use_vector:
+            vector_store.upsert(qdrant_ids, embeddings, qdrant_payloads)
 
         # 6. 回填解析结果，置为 completed
         DocumentRepository.mark_completed(
@@ -226,7 +234,7 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
             raw_text=result.raw_text,
         )
         clear_chat_cache()  # 新文档可检索，清空问答缓存
-        logger.info(f"Document {document_id} ({filename}) ingested: {len(chunks)} chunks")
+        logger.info(f"Document {document_id} ({filename}) ingested: {len(chunks)} chunks, index={parser.INDEX_TYPE}")
     except Exception as e:
         logger.error(f"Ingest failed for document {document_id} ({filename}): {e}")
         DocumentRepository.mark_failed(document_id, str(e))
@@ -239,7 +247,9 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
     - 向量路：语义相近（Qdrant，按 user_id 过滤）
     - BM25 路：字面精确（PG tsvector，JOIN documents 按 user_id 过滤）
       两路互补：编号/专名/错误码靠 BM25，同义改写靠向量
+      JSON 文档只建了倒排索引（不写 Qdrant），因此只可能从 BM25 路召回
     - use_bm25=False 时走纯向量模式（跳过 BM25 与 RRF），用于检索策略 A/B 对比评测
+       此时 JSON 文档不可见
     返回：[{content, section, type, images, score, filename, index}, ...]
     """
     top_k = top_k or settings.retrieval_top_k

@@ -13,6 +13,7 @@ from src.parsers.word_parser import WordParser
 from src.parsers.markdown_parser import MarkdownParser
 from src.parsers.html_parser import HTMLParser
 from src.parsers.txt_parser import TXTParser
+from src.parsers.json_parser import JSONParser
 
 # 扩展名（小写，含点）-> 解析器类
 _PARSER_REGISTRY: Dict[str, Type[BaseParser]] = {
@@ -24,6 +25,7 @@ _PARSER_REGISTRY: Dict[str, Type[BaseParser]] = {
     ".htm": HTMLParser,
     ".txt": TXTParser,
     ".text": TXTParser,
+    ".json": JSONParser,
 }
 
 # 单例缓存：默认参数的解析器只创建一次
@@ -65,6 +67,16 @@ def parse(file_path: str, **kwargs):
 def parse_from_bytes(file_bytes: bytes, filename: str, **kwargs):
     """便捷方法：从字节数据解析，filename 用于识别扩展名"""
     return get_parser(filename, **kwargs).parse_from_bytes(file_bytes, filename)
+
+
+def index_type_for(filename: str) -> str:
+    """返回该文件应使用的索引类型（vector / bm25）
+
+    未知格式按 vector 处理（后续解析会抛 ValueError，这里不改变原有行为）。
+    """
+    ext = Path(filename).suffix.lower()
+    parser_cls = _PARSER_REGISTRY.get(ext)
+    return getattr(parser_cls, "INDEX_TYPE", "vector") if parser_cls else "vector"
 
 
 def supported_extensions() -> List[str]:

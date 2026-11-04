@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="RAG 文档解析 API",
-    description="支持 PDF / Word / Markdown / HTML / TXT 的解析与分块",
+    description="支持 PDF / Word / Markdown / HTML / TXT / JSON 的解析与分块",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -187,7 +187,8 @@ async def chunk_file(
     else:
         chunker = DEFAULT_CHUNKER
 
-    chunks = chunker.split(result.raw_text, tables=result.tables)
+    # 分块：解析器自带 chunks（JSON 按记录预分块）优先，否则走通用 chunker
+    chunks = result.chunks or chunker.split(result.raw_text)
 
     return ChunkResponse(
         filename=result.filename,
