@@ -309,6 +309,11 @@ result = ImageParser().parse("test_file/xxx.png")
 - VLM 返回非 JSON 时退化：整段输出作为图片描述，不影响入库
 - 模型默认 `qwen3.8-omni-flash`，可用 `VISION_MODEL` / `VISION_BASE_URL` 单独配置
 
+**预处理（Pillow，送给 VLM 之前）**
+
+1. **EXIF 方向修正**：手机照片的像素通常是横躺存的，朝向只记在 EXIF `Orientation` 标签里。`ImageOps.exif_transpose()` 按标签把旋转/镜像真正写进像素并清除标签。不做这步，重编码成 JPEG 时标签会丢失，模型收到的就是一张转不回来的横图，OCR 直接错行。
+2. **等比缩放，长边不超过 1568px**：`thumbnail()` 保持宽高比，横图缩宽（4000×3000 → 1568×1176）、竖图缩高（3000×4000 → 1176×1568），长边不超 1568 的原样保留，不放大。VLM 按 28×28 像素切 patch、每块约 1 个 token，4000×3000 约 1.5 万 token，压到 1568×1176 约 2300 token，费用和延迟同步下降；再往下压会糊掉小字，所以 1568 是省 token 与保 OCR 精度的平衡点。
+
 ### TextChunker
 
 ```python
