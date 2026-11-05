@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="RAG 文档解析 API",
-    description="支持 PDF / Word / Markdown / HTML / TXT / JSON 的解析与分块",
+    description="支持 PDF / Word / Markdown / HTML / TXT / JSON / 图片（VLM 描述）的解析与分块",
     version="0.1.0",
     lifespan=lifespan,
 )

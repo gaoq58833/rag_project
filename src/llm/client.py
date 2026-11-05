@@ -1,4 +1,5 @@
-"""LLM 客户端：embedding / chat / rerank，统一 OpenAI 兼容格式"""
+"""LLM 客户端：embedding / chat / vision / rerank，统一 OpenAI 兼容格式"""
+import base64
 from typing import List, Optional
 
 import httpx
@@ -13,6 +14,7 @@ class LLMClient:
     def __init__(self):
         self._embedding_client: Optional[OpenAI] = None
         self._chat_client: Optional[OpenAI] = None
+        self._vision_client: Optional[OpenAI] = None
 
     # ---------- Embedding ----------
     @property
@@ -85,6 +87,36 @@ class LLMClient:
             delta = chunk.choices[0].delta.content
             if delta:
                 yield delta
+
+    # ---------- Vision（图片理解） ----------
+    @property
+    def vision_client(self) -> OpenAI:
+        if self._vision_client is None:
+            self._vision_client = OpenAI(
+                api_key=settings.vision_api_key,
+                base_url=settings.vision_base_url,
+            )
+        return self._vision_client
+
+    def chat_vision(self, prompt: str, image_bytes: bytes, mime_type: str = "image/jpeg",
+                    temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> str:
+        """多模态对话：prompt + 一张图片（base64 内联），返回模型输出文本"""
+        temperature = settings.vision_temperature if temperature is None else temperature
+        max_tokens = settings.vision_max_tokens if max_tokens is None else max_tokens
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        resp = self.vision_client.chat.completions.create(
+            model=settings.vision_model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+                ],
+            }],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content or ""
 
     def rerank(self, query: str, documents: List[str], top_n: Optional[int] = None) -> List[int]:
         """重排，返回排序后的文档索引列表（分数从高到低）

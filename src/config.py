@@ -16,6 +16,13 @@ class Settings:
     llm_base_url: str = os.getenv("LLM_BASE_URL", "")
     llm_model: str = os.getenv("LLM_MODEL", "qwen3.7-plus")
 
+    # Vision（图片理解，OpenAI 兼容多模态接口）
+    vision_api_key: str = os.getenv("VISION_API_KEY") or os.getenv("LLM_API_KEY", "")
+    vision_base_url: str = os.getenv("VISION_BASE_URL") or os.getenv("LLM_BASE_URL", "")
+    vision_model: str = os.getenv("VISION_MODEL", "qwen3.8-omni-flash")
+    vision_temperature: float = float(os.getenv("VISION_TEMPERATURE", "0.1"))
+    vision_max_tokens: int = int(os.getenv("VISION_MAX_TOKENS", "1024"))
+
     # Embedding
     embedding_api_key: str = os.getenv("EMBEDDING_API_KEY") or os.getenv("LLM_API_KEY", "")
     embedding_base_url: str = os.getenv("EMBEDDING_BASE_URL") or os.getenv("LLM_BASE_URL", "")

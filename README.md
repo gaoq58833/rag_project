@@ -1,10 +1,10 @@
 # 📄 RAG 文档处理管线
 
-> 把 PDF / Word / Markdown / HTML / TXT 转成结构化 markdown，切成语义完整的检索块，向量化后存入 Qdrant；JSON 按记录切块、只建 PostgreSQL 倒排索引。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
+> 把 PDF / Word / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块），切成语义完整的检索块后向量化入 Qdrant；JSON 只建 PostgreSQL 倒排索引。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.162%2B-009688)](https://fastapi.tiangolo.com/)
-[![Formats](https://img.shields.io/badge/formats-PDF%20%7C%20DOCX%20%7C%20MD%20%7C%20HTML%20%7C%20TXT%20%7C%20JSON-orange)]()
+[![Formats](https://img.shields.io/badge/formats-PDF%20%7C%20DOCX%20%7C%20MD%20%7C%20HTML%20%7C%20TXT%20%7C%20JSON%20%7C%20IMG-orange)]()
 [![Vector DB](https://img.shields.io/badge/vector-Qdrant-purple)]()
 [![DB](https://img.shields.io/badge/db-PostgreSQL-blue)]()
 [![License](https://img.shields.io/badge/license-Unlicense-lightgrey)]()
@@ -13,10 +13,10 @@
 
 ## ✨ 功能特性
 
-- **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Markdown、HTML、TXT、JSON 一站式覆盖
+- **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Markdown、HTML、TXT、JSON、图片（VLM 描述 + OCR）一站式覆盖
 - **智能分块**：段落优先的级联降级策略（段落 → 句子 → 字符），表格原子化、图片归属、章节路径溯源
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
-- **RAG 全链路**：入库（解析→分块→向量化）→ 混合召回（向量语义 + BM25 关键词 → RRF 融合）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
+- **RAG 全链路**：入库（解析→分块→向量化/倒排）→ 混合召回（向量语义 + BM25 关键词 → RRF 融合）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
 - **检索可观测**：`retrieve()` 支持 `use_bm25=False` 切换纯向量模式，用于 A/B 对比评测；100 题实测混合检索 Hit Rate@3 比纯向量高 8%、MRR 高 0.068
 - **流式输出**：`/chat/stream` SSE 接口，逐 token 渲染回答，缓存命中时模拟流式保持体验一致
 - **问答缓存**：同用户同问题+同历史 10 分钟内直接返回（TTL=600s，maxsize=500，LRU 淘汰），跳过检索+LLM，响应从 4s 降到 50ms
@@ -100,6 +100,7 @@ cp .env.example .env
 | `LLM_BASE_URL`    | OpenAI 兼容端点，如 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `EMBEDDING_MODEL` | 向量化模型，默认 `qwen3.7-text-embedding`（1024 维）                    |
 | `LLM_MODEL`       | 问答模型，默认 `qwen3.7-plus`                                           |
+| `VISION_MODEL`    | 图片理解模型，默认 `qwen3.8-omni-flash`                                 |
 | `RERANKER_MODEL`  | 重排模型，默认 `qwen3-rerank`                                           |
 | `PG_*`            | PostgreSQL 连接信息（host/port/db/user/password）                       |
 | `QDRANT_PATH`     | 本地模式路径，默认 `./data/qdrant`（无需启 Qdrant 服务）                |
@@ -150,10 +151,12 @@ print(result.raw_text)      # 完整 markdown 文本
 ## 🔄 处理流程
 
 ```
-原始文件 ──> 解析器 ──> markdown ──> 清洗 ──> 分块器 ──> chunks
+原始文件 ──> 解析器 ──> markdown / JSON 记录 / 图片描述 ──> 清洗 ──> 分块器 ──> chunks
               │                                            │
               └── 图片存 data/images/                       ├──> PostgreSQL（完整 chunk 数据）
                                                            └──> 向量化 ──> Qdrant（向量 + 最小 payload）
+
+注：JSON 由解析器直接产出 chunks 且只建倒排；图片走向量 + 倒排，均跳过通用 chunker。
 
 检索： query ──> 向量化 ──> Qdrant 语义召回(top_k=10) ─┐
          └──> jieba 分词 ──> PG tsvector BM25 召回(top_k=15) ─┴─> RRF 融合
@@ -170,10 +173,11 @@ print(result.raw_text)      # 完整 markdown 文本
 | HTML 解析  | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退           |
 | TXT 解析   | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                       |
 | JSON 解析  | `src/parsers/json_parser.py`                 | 一条记录一个 chunk，字段名拆词，只走 BM25 倒排索引                 |
+| 图片解析   | `src/parsers/image_parser.py`                | VLM 提取描述/OCR，拼成文本走向量检索（以文字找图）                 |
 | 表格处理   | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                       |
 | 清洗       | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                             |
 | 分块       | `src/parsers/chunker.py`                     | 段落优先的降级分块 + 章节路径 + 表格原子单元 + 图片归属            |
-| LLM 客户端 | `src/llm/client.py`                          | OpenAI 兼容：embed / chat / rerank，统一走一个 SDK                 |
+| LLM 客户端 | `src/llm/client.py`                          | OpenAI 兼容：embed / chat / vision / rerank，统一走一个 SDK        |
 | 向量库     | `src/vectorstore/qdrant_store.py`            | Qdrant 本地/服务双模式，HNSW 索引，payload 过滤                    |
 | 业务库     | `src/db/database.py` / `repository.py`       | PostgreSQL 连接池 + documents/chunks CRUD，启动自动建表            |
 | RAG 管线   | `src/rag/pipeline.py`                        | ingest_file / retrieve / chat 三函数，串联全链路                   |
@@ -289,6 +293,22 @@ JSON 结构强、字段名可精确匹配，**不走向量索引**（`INDEX_TYPE
 - 解析器直接产出 `chunks`，不再经 TextChunker 二次切分，避免多条记录挤进同一块稀释 `ts_rank`
 - 超过 1000 字符的记录按字段行继续切；嵌套深度、单值长度均有上限
 
+### ImageParser
+
+```python
+from src.parsers.image_parser import ImageParser
+
+result = ImageParser().parse("test_file/xxx.png")
+```
+
+独立上传图片时使用：先把长边压到 1568px，调用视觉模型输出摘要/对象/OCR/关键词，再拼成文本走向量检索，实现“以文字找图”：
+
+- 支持 jpg / jpeg / png / webp，单图上限 10MB
+- 原图保存到 `data/images/`，`chunk.images` 记录路径，回答时可直接回传原图
+- chunk 同时写入 Qdrant 与 PG tsvector：语义描述走向量，图中文字和关键词也能被 BM25 命中
+- VLM 返回非 JSON 时退化：整段输出作为图片描述，不影响入库
+- 模型默认 `qwen3.8-omni-flash`，可用 `VISION_MODEL` / `VISION_BASE_URL` 单独配置
+
 ### TextChunker
 
 ```python
@@ -354,6 +374,7 @@ query → embed → Qdrant.query_points(top_k=10, user_id 过滤) ─┐
 - 默认混合检索（向量 + BM25 + RRF 融合）；传 `use_bm25=False` 切换纯向量模式，用于评测 A/B 对比
 - BM25 覆盖向量对编号/专名/参数类精确查询的弱区，RRF 融合不依赖两路分数量纲（向量是余弦相似度、BM25 是 ts_rank），只看排名
 - JSON 文档不写 Qdrant，只能从 BM25 路召回；`use_bm25=False` 的纯向量模式下 JSON 不可见
+- 图片 chunk 同时写入 Qdrant 和 tsv，两路都能召回，适合“文字找图”
 
 ### 问答（chat）
 
@@ -567,6 +588,7 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 | `python tests/test_html.py`     | HTML 解析 → 分块 → 写 `data/html_test/`      |
 | `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`        |
 | `python tests/test_json.py`     | JSON 解析：记录级分块、字段拆词、索引类型    |
+| `python tests/test_image.py`    | 图片解析：VLM 描述（mock）、原图落盘、向量索引 |
 | `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理 |
 | `python tests/test_api.py`      | FastAPI 接口：health/parse/chunk/错误处理    |
 
@@ -654,11 +676,13 @@ src/
     markdown_parser.py Markdown 解析
     html_parser.py    HTML 转 markdown
     txt_parser.py     纯文本解析（段落策略）
+    json_parser.py    JSON 解析（记录级分块，BM25）
+    image_parser.py   图片解析（VLM 描述 + OCR，向量检索）
     table_parser.py   表格合并与转换
     cleaner.py        文本清洗
     chunker.py        分块策略
   llm/                LLM 客户端（OpenAI 兼容）
-    client.py         embed / chat / rerank
+    client.py         embed / chat / vision / rerank
   vectorstore/        向量库
     qdrant_store.py   Qdrant 封装（本地/服务双模式，HNSW）
   db/                 业务数据库（PostgreSQL）
@@ -719,6 +743,8 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `EMBEDDING_MODEL`    | `qwen3.7-text-embedding` | 向量化模型（1024 维）                                                                   |
 | `EMBEDDING_DIM`      | `1024`                   | 向量维度，必须与 embedding 模型输出一致，换模型时同步修改并重建向量库                   |
 | `LLM_MODEL`          | `qwen3.7-plus`           | 问答模型                                                                                |
+| `VISION_MODEL`       | `qwen3.8-omni-flash`     | 图片理解模型（需支持多模态）                                                            |
+| `VISION_BASE_URL`    | = LLM_BASE_URL           | 视觉模型端点                                                                            |
 | `RERANKER_MODEL`     | `qwen3-rerank`           | 重排模型                                                                                |
 
 ### 向量数据库（Qdrant）

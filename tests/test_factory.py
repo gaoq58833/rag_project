@@ -11,6 +11,7 @@ from src.parsers.word_parser import WordParser
 from src.parsers.markdown_parser import MarkdownParser
 from src.parsers.html_parser import HTMLParser
 from src.parsers.txt_parser import TXTParser
+from src.parsers.image_parser import ImageParser
 
 
 def test_routing():
@@ -23,6 +24,8 @@ def test_routing():
     assert isinstance(get_parser("a.htm"), HTMLParser)
     assert isinstance(get_parser("a.txt"), TXTParser)
     assert isinstance(get_parser("a.TEXT"), TXTParser)  # 大小写不敏感
+    assert isinstance(get_parser("a.jpg"), ImageParser)
+    assert isinstance(get_parser("a.PNG"), ImageParser)
     assert isinstance(get_parser("/path/to/file.PDF"), PDFParser)
     print("[OK] 扩展名路由正确")
 
