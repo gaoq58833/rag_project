@@ -31,7 +31,7 @@
 
 ## 📊 量化指标（100+ 文档实测）
 
-> 覆盖 PDF / Word / Markdown / HTML / TXT 多格式样本，100+ 文档实测结论。
+> 覆盖 PDF / Word / Markdown / HTML / TXT / JSON / 图片 多格式样本，100+ 文档实测结论。
 
 ### 解析准确率
 
@@ -164,28 +164,28 @@ print(result.raw_text)      # 完整 markdown 文本
 问答： 相关块 ──> 构造上下文 ──> LLM 生成回答 + 引用来源
 ```
 
-| 环节       | 模块                                         | 说明                                                               |
-| ---------- | -------------------------------------------- | ------------------------------------------------------------------ |
-| 工厂       | `src/parsers/factory.py`                     | 按扩展名自动选解析器 + 单例缓存，支持 `parse()` 一步到位           |
-| PDF 解析   | `src/parsers/pdf_parser.py`                  | docling：版式模型定位段落/表格，TableFormer 还原表格，图片另存本地 |
-| Word 解析  | `src/parsers/word_parser.py`                 | python-docx 直接读 OOXML，不用模型、无 OCR 噪音                    |
-| MD 解析    | `src/parsers/markdown_parser.py`             | 直接读 .md，复用清洗与分块逻辑                                     |
-| HTML 解析  | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退           |
-| TXT 解析   | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                       |
-| JSON 解析  | `src/parsers/json_parser.py`                 | 一条记录一个 chunk，字段名拆词，只走 BM25 倒排索引                 |
-| 图片解析   | `src/parsers/image_parser.py`                | VLM 提取描述/OCR，拼成文本走向量检索（以文字找图）                 |
-| 表格处理   | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                       |
-| 清洗       | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                             |
-| 分块       | `src/parsers/chunker.py`                     | 段落优先的降级分块 + 章节路径 + 表格原子单元 + 图片归属            |
-| LLM 客户端 | `src/llm/client.py`                          | OpenAI 兼容：embed / chat / vision / rerank，统一走一个 SDK        |
-| 向量库     | `src/vectorstore/qdrant_store.py`            | Qdrant 本地/服务双模式，HNSW 索引，payload 过滤                    |
-| 业务库     | `src/db/database.py` / `repository.py`       | PostgreSQL 连接池 + documents/chunks CRUD，启动自动建表            |
-| RAG 管线   | `src/rag/pipeline.py`                        | ingest_file / retrieve / chat 三函数，串联全链路                   |
-| 全文检索   | `src/db/fts.py`                              | jieba 分词 + PG tsvector BM25 + RRF 融合，与向量检索互补           |
-| 评测       | `量化/eval_chunks.py`、`量化/eval_tables.py` | 百分制打分 / 表格准确率比对，结果写入 `量化/指标记录.md`           |
-| 评测       | `量化/eval_retrieval.py`                     | 检索层 A/B 对比（纯向量 vs 混合），Hit Rate@K + MRR                |
+| 环节       | 模块                                         | 说明                                                                                |
+| ---------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 工厂       | `src/parsers/factory.py`                     | 按扩展名自动选解析器 + 单例缓存，支持 `parse()` 一步到位                            |
+| PDF 解析   | `src/parsers/pdf_parser.py`                  | docling：版式模型定位段落/表格，TableFormer 还原表格，图片另存本地                  |
+| Word 解析  | `src/parsers/word_parser.py`                 | python-docx 直接读 OOXML，不用模型、无 OCR 噪音                                     |
+| MD 解析    | `src/parsers/markdown_parser.py`             | 直接读 .md，复用清洗与分块逻辑                                                      |
+| HTML 解析  | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退                            |
+| TXT 解析   | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                                        |
+| JSON 解析  | `src/parsers/json_parser.py`                 | 一条记录一个 chunk，字段名拆词，只走 BM25 倒排索引                                  |
+| 图片解析   | `src/parsers/image_parser.py`                | VLM 提取描述/OCR，拼成文本走向量检索（以文字找图）                                  |
+| 表格处理   | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                                        |
+| 清洗       | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                                              |
+| 分块       | `src/parsers/chunker.py`                     | 段落优先的降级分块 + 章节路径 + 表格原子单元 + 图片归属                             |
+| LLM 客户端 | `src/llm/client.py`                          | OpenAI 兼容：embed / chat / vision / rerank，统一走一个 SDK                         |
+| 向量库     | `src/vectorstore/qdrant_store.py`            | Qdrant 本地/服务双模式，HNSW 索引，payload 过滤                                     |
+| 业务库     | `src/db/database.py` / `repository.py`       | PostgreSQL 连接池 + documents/chunks CRUD，启动自动建表                             |
+| RAG 管线   | `src/rag/pipeline.py`                        | ingest_file / retrieve / chat 三函数，串联全链路                                    |
+| 全文检索   | `src/db/fts.py`                              | jieba 分词 + PG tsvector BM25 + RRF 融合，与向量检索互补                            |
+| 评测       | `量化/eval_chunks.py`、`量化/eval_tables.py` | 百分制打分 / 表格准确率比对，结果写入 `量化/指标记录.md`                            |
+| 评测       | `量化/eval_retrieval.py`                     | 检索层 A/B 对比（纯向量 vs 混合），Hit Rate@K + MRR                                 |
 | 评测       | `量化/eval_generation_ragas.py`              | 生成层评测（RAGAS LLM-as-judge），faithfulness / context_precision / context_recall |
-| 评测集生成 | `量化/generate_eval_dataset.py`              | 基于真实分块调用 LLM 自动生成评测题，校验答案子串真实存在原文       |
+| 评测集生成 | `量化/generate_eval_dataset.py`              | 基于真实分块调用 LLM 自动生成评测题，校验答案子串真实存在原文                       |
 
 ---
 
@@ -577,20 +577,20 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 
 ### 测试命令
 
-| 命令                            | 作用                                         |
-| ------------------------------- | -------------------------------------------- |
-| `python tests/test_pdf.py`      | 解析 PDF，输出 markdown                      |
-| `python tests/test_cleaner.py`  | 验证清洗规则                                 |
-| `python tests/test_table.py`    | 表格解析、跨页合并、转 DataFrame             |
-| `python tests/test_chunker.py`  | PDF 全流程 → 分块 → 写 `data/chunk_test/`    |
-| `python tests/test_word.py`     | Word 解析 → 分块 → 写 `data/word_test/`      |
-| `python tests/test_markdown.py` | Markdown 解析 → 分块 → 写 `data/md_test/`    |
-| `python tests/test_html.py`     | HTML 解析 → 分块 → 写 `data/html_test/`      |
-| `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`        |
-| `python tests/test_json.py`     | JSON 解析：记录级分块、字段拆词、索引类型    |
+| 命令                            | 作用                                           |
+| ------------------------------- | ---------------------------------------------- |
+| `python tests/test_pdf.py`      | 解析 PDF，输出 markdown                        |
+| `python tests/test_cleaner.py`  | 验证清洗规则                                   |
+| `python tests/test_table.py`    | 表格解析、跨页合并、转 DataFrame               |
+| `python tests/test_chunker.py`  | PDF 全流程 → 分块 → 写 `data/chunk_test/`      |
+| `python tests/test_word.py`     | Word 解析 → 分块 → 写 `data/word_test/`        |
+| `python tests/test_markdown.py` | Markdown 解析 → 分块 → 写 `data/md_test/`      |
+| `python tests/test_html.py`     | HTML 解析 → 分块 → 写 `data/html_test/`        |
+| `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`          |
+| `python tests/test_json.py`     | JSON 解析：记录级分块、字段拆词、索引类型      |
 | `python tests/test_image.py`    | 图片解析：VLM 描述（mock）、原图落盘、向量索引 |
-| `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理 |
-| `python tests/test_api.py`      | FastAPI 接口：health/parse/chunk/错误处理    |
+| `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理   |
+| `python tests/test_api.py`      | FastAPI 接口：health/parse/chunk/错误处理      |
 
 `test_*.py` 都会报告：解析覆盖率、块数、超限/碎片块、丢失字符、重复字符、章节路径覆盖、图片归属。
 
@@ -628,9 +628,9 @@ python 量化/eval_chunks.py                     # 默认评 data/chunk_test
 
 > 评测集由 `量化/generate_eval_dataset.py` 基于真实分块调用 LLM 自动生成，校验答案子串真实存在原文（过滤幻觉），共 100 题。同一评测集分别跑纯向量模式与混合模式，Hit Rate@3 + MRR 对比：
 
-| 检索模式        | Hit Rate@3 | MRR@3  |
-| --------------- | ---------- | ------ |
-| 纯向量          | 87.00%     | 0.8400 |
+| 检索模式         | Hit Rate@3 | MRR@3      |
+| ---------------- | ---------- | ---------- |
+| 纯向量           | 87.00%     | 0.8400     |
 | 向量 + BM25 混合 | **95.00%** | **0.9083** |
 
 **结论**：混合检索比纯向量 Hit Rate 高 8 个百分点、MRR 高 0.068，BM25 关键词检索对编号/专名/参数类精确查询有明显补充价值。
@@ -646,11 +646,11 @@ python 量化/eval_retrieval.py alice /tmp/eval_dataset_100.json
 
 > RAGAS 以项目 LLM 网关为裁判，对 RAG 管线的生成质量打分。评测题 30 道（同上评测集），ground_truth 取 `expected_substring`。未纳入 `answer_relevancy`（依赖 embeddings 接口，DashScope 端点与 langchain 请求格式不兼容）。
 
-| 指标                | 分数   | 含义                                       |
-| ------------------- | ------ | ------------------------------------------ |
-| faithfulness        | 0.9333 | 回答是否基于检索上下文（不编造、不引入外部信息） |
-| context_precision   | 0.9722 | 检索到的上下文中相关内容占比                |
-| context_recall      | 1.0000 | 检索上下文是否覆盖参考答案所需信息          |
+| 指标              | 分数   | 含义                                             |
+| ----------------- | ------ | ------------------------------------------------ |
+| faithfulness      | 0.9333 | 回答是否基于检索上下文（不编造、不引入外部信息） |
+| context_precision | 0.9722 | 检索到的上下文中相关内容占比                     |
+| context_recall    | 1.0000 | 检索上下文是否覆盖参考答案所需信息               |
 
 **结论**：三项指标均在 0.93 以上。context_recall 满分说明混合检索能稳定召回参考答案；faithfulness 0.93 说明绝大多数回答严格基于检索内容。
 
@@ -776,14 +776,14 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 
 ### RAG 检索参数
 
-| 变量                  | 默认值 | 说明                         |
-| --------------------- | ------ | ---------------------------- |
-| `RETRIEVAL_TOP_K`     | `10`   | 向量召回数量                 |
-| `BM25_TOP_K`          | `15`   | BM25 关键词召回数量          |
-| `RERANK_TOP_N`        | `3`    | 重排后保留数量               |
-| `CHAT_HISTORY_ROUNDS` | `5`    | 多轮对话保留最近 N 轮上下文  |
-| `LLM_TEMPERATURE`     | `0.2`  | 生成温度，越低越确定         |
-| `LLM_MAX_TOKENS`      | `2048` | 单次回答最大生成 token 数    |
+| 变量                  | 默认值 | 说明                        |
+| --------------------- | ------ | --------------------------- |
+| `RETRIEVAL_TOP_K`     | `10`   | 向量召回数量                |
+| `BM25_TOP_K`          | `15`   | BM25 关键词召回数量         |
+| `RERANK_TOP_N`        | `3`    | 重排后保留数量              |
+| `CHAT_HISTORY_ROUNDS` | `5`    | 多轮对话保留最近 N 轮上下文 |
+| `LLM_TEMPERATURE`     | `0.2`  | 生成温度，越低越确定        |
+| `LLM_MAX_TOKENS`      | `2048` | 单次回答最大生成 token 数   |
 
 ### 问答缓存
 
