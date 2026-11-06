@@ -29,6 +29,12 @@ class Settings:
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "qwen3.7-text-embedding")
     embedding_dim: int = int(os.getenv("EMBEDDING_DIM", "1024"))  # 换 embedding 模型时同步修改
 
+    # 多模态 Embedding（以图搜图，DashScope 原生接口，非 OpenAI 兼容）
+    mm_embedding_api_key: str = os.getenv("MM_EMBEDDING_API_KEY") or os.getenv("LLM_API_KEY", "")
+    mm_embedding_base_url: str = os.getenv("MM_EMBEDDING_BASE_URL", "https://dashscope.aliyuncs.com")
+    mm_embedding_model: str = os.getenv("MM_EMBEDDING_MODEL", "multimodal-embedding-v1")
+    mm_embedding_dim: int = int(os.getenv("MM_EMBEDDING_DIM", "1024"))  # 换模型时同步修改，需重建 rag_images 集合
+
     # Reranker
     reranker_api_key: str = os.getenv("RERANKER_API_KEY") or os.getenv("LLM_API_KEY", "")
     reranker_base_url: str = os.getenv("RERANKER_BASE_URL") or os.getenv("LLM_BASE_URL", "")
@@ -39,6 +45,7 @@ class Settings:
     qdrant_path: str = os.getenv("QDRANT_PATH", "")  # 设了则用本地嵌入式模式，无需启服务
     qdrant_api_key: str = os.getenv("QDRANT_API_KEY", "")
     qdrant_collection: str = os.getenv("QDRANT_COLLECTION", "rag_chunks")
+    qdrant_image_collection: str = os.getenv("QDRANT_IMAGE_COLLECTION", "rag_images")  # 以图搜图专用
     # HNSW 索引参数（仅创建集合时生效，改了需重建集合）
     qdrant_hnsw_m: int = int(os.getenv("QDRANT_HNSW_M", "16"))
     qdrant_hnsw_ef_construct: int = int(os.getenv("QDRANT_HNSW_EF_CONSTRUCT", "100"))

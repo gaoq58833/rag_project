@@ -19,6 +19,7 @@ dependencies = [
   "python-multipart>=0.0.32",
   # RAG 链路
   "openai>=1.50.0",
+  "httpx>=0.27.0",  # DashScope 原生 API（rerank / 多模态 embedding）
   "qdrant-client>=1.13.0",
   "python-dotenv>=1.0.0",
   "psycopg2-binary>=2.9.9",

@@ -20,7 +20,8 @@ from src.db.repository import (
 from src.llm import llm_client
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, index_type_for
-from src.vectorstore import vector_store
+from src.parsers.image_parser import ImageParser
+from src.vectorstore import image_vector_store, vector_store
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 
@@ -225,6 +226,22 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
         if use_vector:
             vector_store.upsert(qdrant_ids, embeddings, qdrant_payloads)
 
+        # 5b. 图片文档额外写入图片向量集合（以图搜图），与文本集合隔离
+        #     point_id 与 rag_chunks 中的 chunk 共用，检索到后可直接回查 PG 取描述/原图
+        if isinstance(parser, ImageParser) and pg_chunks:
+            try:
+                prepared, _, _ = ImageParser._prepare(file_bytes)
+                image_vec = llm_client.embed_image(prepared)
+                point_id = pg_chunks[0]["qdrant_point_id"]
+                image_vector_store.upsert(
+                    [point_id],
+                    [image_vec],
+                    [{"qdrant_point_id": point_id, "user_id": user_id, "filename": filename}],
+                )
+            except Exception as e:
+                # 图片向量写入失败不阻塞主流程，仅影响以图搜图能力
+                logger.error(f"Image vector ingest failed for document {document_id} ({filename}): {e}")
+
         # 6. 回填解析结果，置为 completed
         DocumentRepository.mark_completed(
             document_id,
@@ -306,6 +323,47 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
             "score": score_map.get(pid, 0.0),  # 混合模式为 RRF 融合分，纯向量模式为余弦相似度
             "filename": filename_map.get(pid, ""),
             "index": row.get("chunk_index", 0),
+        })
+    return results
+
+
+def retrieve_images(image_bytes: bytes, user_id: str, top_k: Optional[int] = None) -> List[dict]:
+    """以图搜图：图片预处理 → 多模态 embedding → 搜 rag_images 集合 → 回 PG 取描述/原图
+
+    检索的是图片向量集合（与文本向量同 point_id），按 user_id 隔离。
+    返回：[{content, images, score, filename}, ...]，score 为余弦相似度
+    """
+    top_k = top_k or settings.retrieval_top_k
+
+    # 与入库时同样的预处理（EXIF 转正 + 缩放到长边 1568 + JPEG），保证向量可比
+    prepared, _, _ = ImageParser._prepare(image_bytes)
+    query_vec = llm_client.embed_image(prepared)
+
+    filter_ = Filter(must=[
+        FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+    ])
+    candidates = image_vector_store.search(query_vec, top_k=top_k, filter_=filter_)
+    if not candidates:
+        return []
+
+    point_ids = [c["payload"]["qdrant_point_id"] for c in candidates]
+    score_map = {c["payload"]["qdrant_point_id"]: c.get("score", 0.0) for c in candidates}
+    filename_map = {c["payload"]["qdrant_point_id"]: c["payload"].get("filename", "") for c in candidates}
+
+    # 回 PG 取完整 chunk（VLM 描述 + 原图路径）
+    pg_rows = ChunkRepository.get_by_qdrant_ids(point_ids)
+    pg_map = {str(r["qdrant_point_id"]): r for r in pg_rows}
+
+    results = []
+    for pid in point_ids:
+        row = pg_map.get(pid)
+        if row is None:
+            continue
+        results.append({
+            "content": row["content"],
+            "images": row.get("images", []),
+            "score": score_map.get(pid, 0.0),
+            "filename": filename_map.get(pid, ""),
         })
     return results
 

@@ -8,10 +8,16 @@ from src.config import settings
 
 
 class VectorStore:
-    """封装 Qdrant 操作：建库、入库、检索"""
+    """封装 Qdrant 操作：建库、入库、检索
 
-    def __init__(self):
-        self.collection = settings.qdrant_collection
+    通过 collection/vector_size 参数支持多集合：
+    - vector_store：文本 chunk 集合（rag_chunks，EMBEDDING_DIM 维）
+    - image_vector_store：图片集合（rag_images，MM_EMBEDDING_DIM 维，以图搜图）
+    """
+
+    def __init__(self, collection: Optional[str] = None, vector_size: Optional[int] = None):
+        self.collection = collection or settings.qdrant_collection
+        self.vector_size = vector_size or settings.embedding_dim
         self._client: Optional[QdrantClient] = None
         self._collection_ready = False
 
@@ -38,7 +44,7 @@ class VectorStore:
             client.create_collection(
                 collection_name=self.collection,
                 vectors_config=VectorParams(
-                    size=settings.embedding_dim,  # 从 .env 读取（EMBEDDING_DIM）
+                    size=self.vector_size,
                     distance=Distance.COSINE,
                     on_disk=True,
                 ),
@@ -117,3 +123,8 @@ class VectorStore:
 
 # 全局单例（懒加载，导入时不连 Qdrant）
 vector_store = VectorStore()
+# 图片向量集合（以图搜图），与文本集合隔离
+image_vector_store = VectorStore(
+    collection=settings.qdrant_image_collection,
+    vector_size=settings.mm_embedding_dim,
+)

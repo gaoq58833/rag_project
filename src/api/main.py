@@ -44,8 +44,8 @@ from src.db.repository import (
 )
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, supported_extensions
-from src.rag import chat as rag_chat, chat_stream as rag_chat_stream, clear_chat_cache, process_ingest, retrieve as rag_retrieve, submit_ingest
-from src.vectorstore import vector_store
+from src.rag import chat as rag_chat, chat_stream as rag_chat_stream, clear_chat_cache, process_ingest, retrieve as rag_retrieve, retrieve_images as rag_retrieve_images, submit_ingest
+from src.vectorstore import image_vector_store, vector_store
 
 
 @asynccontextmanager
@@ -324,11 +324,12 @@ async def delete_document(
     chunks = ChunkRepository.get_by_document_id(document_id)
     point_ids = [str(c["qdrant_point_id"]) for c in chunks if c.get("qdrant_point_id")]
 
-    # 仅当这些向量不被其他文档引用时，才从 Qdrant 删除
+    # 仅当这些向量不被其他文档引用时，才从 Qdrant 删除（文本集合 + 图片集合）
     if point_ids:
         ref_count = ChunkRepository.count_by_qdrant_ids_excluding_doc(point_ids, document_id)
         if ref_count == 0:
             vector_store.delete_by_ids(point_ids)
+            image_vector_store.delete_by_ids(point_ids)
 
     # PG 删除文档（chunks 表 ON DELETE CASCADE 自动清理）
     db.execute("DELETE FROM documents WHERE id = %s", (document_id,))
@@ -354,6 +355,30 @@ async def retrieve(
         raise HTTPException(status_code=500, detail=f"检索失败：{e}")
 
     return RetrieveResponse(query=query, results=results)
+
+
+@app.post(
+    "/search/image",
+    summary="以图搜图：上传图片，按视觉相似度检索已入库图片",
+)
+async def search_image(
+    file: UploadFile = File(...),
+    top_k: Optional[int] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """上传查询图片，多模态 embedding 后在图片向量集合中检索相似图片。
+
+    返回相似图片的 VLM 描述、原图路径（images 字段）与余弦相似度 score。需登录。
+    """
+    file_bytes = await file.read()
+    try:
+        results = rag_retrieve_images(file_bytes, user_id=current_user["id"], top_k=top_k)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"以图搜图失败：{e}")
+
+    return {"filename": file.filename or "unnamed", "results": results}
 
 
 @app.post(

@@ -48,6 +48,37 @@ class LLMClient:
         """单个 query embedding"""
         return self.embed([text])[0]
 
+    # ---------- 多模态 Embedding（以图搜图，DashScope 原生 API） ----------
+    def _embed_mm(self, contents: List[dict]) -> List[float]:
+        """调 DashScope multimodal-embedding，返回单条向量
+
+        contents 示例：[{"image": "data:image/jpeg;base64,..."}] 或 [{"text": "..."}]
+        图片与文本向量落在同一向量空间，可跨模态检索。
+        """
+        url = settings.mm_embedding_base_url.rstrip("/") + "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+        headers = {
+            "Authorization": f"Bearer {settings.mm_embedding_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.mm_embedding_model,
+            "input": {"contents": contents},
+        }
+        with httpx.Client(timeout=60) as http:
+            resp = http.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            embeddings = resp.json()["output"]["embeddings"]
+        return embeddings[0]["embedding"]
+
+    def embed_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> List[float]:
+        """图片向量（以图搜图入库/查询用）"""
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        return self._embed_mm([{"image": f"data:{mime_type};base64,{b64}"}])
+
+    def embed_mm_text(self, text: str) -> List[float]:
+        """文本向量（与图片同空间，跨模态文搜图用）"""
+        return self._embed_mm([{"text": text}])
+
     # ---------- Chat (LLM) ----------
     @property
     def chat_client(self) -> OpenAI:

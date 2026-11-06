@@ -14,6 +14,7 @@
 ## ✨ 功能特性
 
 - **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Markdown、HTML、TXT、JSON、图片（VLM 描述 + OCR）一站式覆盖
+- **以图搜图**：图片入库时额外写入多模态向量集合（multimodal-embedding-v1），`POST /search/image` 上传图片按视觉相似度检索，与文本检索双集合隔离互不干扰
 - **智能分块**：段落优先的级联降级策略（段落 → 句子 → 字符），表格原子化、图片归属、章节路径溯源
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
 - **RAG 全链路**：入库（解析→分块→向量化/倒排）→ 混合召回（向量语义 + BM25 关键词 → RRF 融合）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
@@ -101,6 +102,7 @@ cp .env.example .env
 | `EMBEDDING_MODEL` | 向量化模型，默认 `qwen3.7-text-embedding`（1024 维）                    |
 | `LLM_MODEL`       | 问答模型，默认 `qwen3.7-plus`                                           |
 | `VISION_MODEL`    | 图片理解模型，默认 `qwen3.8-omni-flash`                                 |
+| `MM_EMBEDDING_MODEL` | 多模态向量模型（以图搜图），默认 `multimodal-embedding-v1`（1024 维） |
 | `RERANKER_MODEL`  | 重排模型，默认 `qwen3-rerank`                                           |
 | `PG_*`            | PostgreSQL 连接信息（host/port/db/user/password）                       |
 | `QDRANT_PATH`     | 本地模式路径，默认 `./data/qdrant`（无需启 Qdrant 服务）                |
@@ -306,6 +308,7 @@ result = ImageParser().parse("test_file/xxx.png")
 - 支持 jpg / jpeg / png / webp，单图上限 10MB
 - 原图保存到 `data/images/`，`chunk.images` 记录路径，回答时可直接回传原图
 - chunk 同时写入 Qdrant 与 PG tsvector：语义描述走向量，图中文字和关键词也能被 BM25 命中
+- 同时把预处理后的图片字节经多模态 embedding 写入独立的 `rag_images` 集合，支撑以图搜图（`/search/image`）；两个集合共用 point_id，检索到后回查 PG 取描述和原图
 - VLM 返回非 JSON 时退化：整段输出作为图片描述，不影响入库
 - 模型默认 `qwen3.8-omni-flash`，可用 `VISION_MODEL` / `VISION_BASE_URL` 单独配置
 
@@ -435,6 +438,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 | GET    | `/documents`                   | 是   | 获取当前用户的文档列表（用户隔离）                                      |
 | DELETE | `/documents/{id}`              | 是   | 删除文档及其向量（共享向量按引用计数安全清理）                          |
 | POST   | `/retrieve`                    | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）                        |
+| POST   | `/search/image`                | 是   | 上传图片 → 多模态向量检索相似图片（以图搜图，返回描述 + 原图路径）      |
 | POST   | `/chat`                        | 是   | `query` → 检索 → LLM 生成回答 + 引用来源，支持多轮对话                  |
 | POST   | `/chat/stream`                 | 是   | 流式问答，SSE 逐 token 返回                                             |
 | GET    | `/conversations`               | 是   | 获取当前用户的对话列表                                                  |
@@ -448,6 +452,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
 `/chunk` 支持查询参数覆盖分块大小：`?max_chunk_size=800&min_chunk_size=100&chunk_overlap=150`。
 `/retrieve` 支持 `?query=xxx&top_k=10&use_rerank=true`。
+`/search/image` 用 multipart 上传图片，支持 `?top_k=10`，返回相似图片的 VLM 描述、`images` 原图路径与余弦相似度 `score`。
 `/chat` 请求体：`{"query": "...", "use_rerank": true, "conversation_id": "可选"}`。
 
 ### 调用示例
@@ -594,6 +599,7 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 | `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`          |
 | `python tests/test_json.py`     | JSON 解析：记录级分块、字段拆词、索引类型      |
 | `python tests/test_image.py`    | 图片解析：VLM 描述（mock）、原图落盘、向量索引 |
+| `python tests/test_image_search.py` | 以图搜图：多模态 embedding（mock）、图片集合检索、用户隔离 |
 | `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理   |
 | `python tests/test_api.py`      | FastAPI 接口：health/parse/chunk/错误处理      |
 
@@ -750,6 +756,9 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `LLM_MODEL`          | `qwen3.7-plus`           | 问答模型                                                                                |
 | `VISION_MODEL`       | `qwen3.8-omni-flash`     | 图片理解模型（需支持多模态）                                                            |
 | `VISION_BASE_URL`    | = LLM_BASE_URL           | 视觉模型端点                                                                            |
+| `MM_EMBEDDING_MODEL` | `multimodal-embedding-v1` | 多模态向量模型（以图搜图，DashScope 原生接口，非 OpenAI 兼容）                         |
+| `MM_EMBEDDING_BASE_URL` | `https://dashscope.aliyuncs.com` | 多模态向量服务端点                                                          |
+| `MM_EMBEDDING_DIM`   | `1024`                   | 多模态向量维度，换模型时同步修改并重建 `rag_images` 集合                                |
 | `RERANKER_MODEL`     | `qwen3-rerank`           | 重排模型                                                                                |
 
 ### 向量数据库（Qdrant）
@@ -760,6 +769,7 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `QDRANT_URL`        | `http://localhost:6333` | 服务模式地址（`QDRANT_PATH` 为空时生效）          |
 | `QDRANT_API_KEY`    | —                       | Qdrant 服务密钥                                   |
 | `QDRANT_COLLECTION` | `rag_chunks`            | 集合名                                            |
+| `QDRANT_IMAGE_COLLECTION` | `rag_images`      | 图片向量集合名（以图搜图，与文本集合隔离）        |
 
 ### 业务数据库（PostgreSQL）
 
