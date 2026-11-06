@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        # macOS 也能跑；Windows 本地已有完整环境，CI 不重复
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies (CPU-only torch on Linux Runner)
+        run: uv sync --frozen --all-extras --no-dev
+
+      - name: Install dev dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Verify torch is CPU version on CI
+        run: |
+          uv run python -c "import torch; print(f'torch={torch.__version__}, cuda_available={torch.cuda.is_available()}')"
+
+      - name: Run all tests
+        run: |
+          echo "=== Running all test files ==="
+          uv run python tests/test_cleaner.py
+          uv run python tests/test_excel.py
+          uv run python tests/test_factory.py
+          uv run python tests/test_html.py
+          uv run python tests/test_json.py
+          uv run python tests/test_markdown.py
+          uv run python tests/test_table.py
+          uv run python tests/test_txt.py
+          uv run python tests/test_word.py
+          echo "=== Done ==="
+        env:
+          # 这些测试会 import src.llm（不会真的调 API，只加载客户端配置），
+          # 但 config 里有默认值，不需要真实 key
+          LLM_API_KEY: dummy
+          EMBEDDING_MODEL: text-embedding-v4
+
+      - name: Test PDF parser import (docling)
+        run: |
+          uv run python -c "
+            from src.parsers.pdf_parser import PDFParser
+            from src.parsers.image_parser import ImageParser
+            from src.parsers.factory import get_parser, supported_extensions
+            print('pdf_parser import OK')
+            print(f'supported: {supported_extensions()}')
+          "
+        # 只验证能 import，不跑真正的解析（需要 docling 模型权重，GitHub Runner 下载慢）
+        env:
+          LLM_API_KEY: dummy
+
+      - name: Test pipeline module import
+        run: |
+          uv run python -c "from src.rag.pipeline import submit_ingest, process_ingest, retrieve; print('pipeline import OK')"
+        env:
+          LLM_API_KEY: dummy

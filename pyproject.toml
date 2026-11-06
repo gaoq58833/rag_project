@@ -30,19 +30,23 @@ dependencies = [
 ]
 
 [tool.uv.sources]
+# torch/torchvision 让 uv 按平台选索引：
+# - Windows (本地有 cu126) → pytorch-cu126 上的 CUDA 版
+# - Linux/darwin (GitHub Runner) → PyPI 上 CPU 版
+# 用平台 marker 完全隔离，避免 uv 在 Windows 上又去 PyPI 拉（交叉解析报错）
 torch = [
-  # 使用我们下面定义的索引 "pytorch-cu126"
-   { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+   { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
+   { index = "pypi", marker = "sys_platform != 'win32'" },
 ]
 torchvision = [
-   { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+   { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
+   { index = "pypi", marker = "sys_platform != 'win32'" },
 ]
 
 [[tool.uv.index]]
-# 定义 PyTorch CUDA 12.6 的专用索引
+# 定义 PyTorch CUDA 12.6 的专用索引（Windows 本地用）
 name = "pytorch-cu126"
 url = "https://download.pytorch.org/whl/cu126"
-# explicit = true 确保只有我们指定的包从这里获取
 explicit = true
 
 [[tool.uv.index]]
