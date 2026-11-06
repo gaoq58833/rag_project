@@ -4,7 +4,7 @@
   python tests/test_excel.py
 
 验证点：
-- 工厂按 .csv/.xlsx/.xls 路由到 ExcelParser，索引类型为 vector
+- 工厂按 .csv/.xlsx/.xls 路由到 ExcelParser，索引类型为 bm25（只建倒排）
 - csv 多编码回退（utf-8-sig / gb18030），分隔符嗅探
 - xlsx 多 sheet 逐个解析，section 标注 sheet 名与行区间
 - xls 走 xlrd 引擎
@@ -59,9 +59,9 @@ def test_factory_routing():
     for ext in (".csv", ".xlsx", ".xls"):
         parser = get_parser(f"data{ext}")
         assert isinstance(parser, ExcelParser), (ext, type(parser))
-        assert index_type_for(f"data{ext}") == "vector"
+        assert index_type_for(f"data{ext}") == "bm25"
     assert ExcelParser().supported_extensions() == [".csv", ".xlsx", ".xls"]
-    assert ExcelParser.INDEX_TYPE == "vector"
+    assert ExcelParser.INDEX_TYPE == "bm25"
 
 
 def test_csv_parse():
