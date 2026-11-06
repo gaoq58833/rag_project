@@ -62,13 +62,7 @@ jobs:
 
       - name: Test PDF parser import (docling)
         run: |
-          uv run python -c "
-            from src.parsers.pdf_parser import PDFParser
-            from src.parsers.image_parser import ImageParser
-            from src.parsers.factory import get_parser, supported_extensions
-            print('pdf_parser import OK')
-            print(f'supported: {supported_extensions()}')
-          "
+          uv run python -c "from src.parsers.pdf_parser import PDFParser; from src.parsers.image_parser import ImageParser; from src.parsers.factory import supported_extensions; print('pdf_parser import OK'); print(f'supported: {supported_extensions()}')"
         # 只验证能 import，不跑真正的解析（需要 docling 模型权重，GitHub Runner 下载慢）
         env:
           LLM_API_KEY: dummy
