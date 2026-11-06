@@ -1,6 +1,6 @@
 # 📄 RAG 文档处理管线
 
-> 把 PDF / Word / Excel / CSV / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块），切成语义完整的检索块后向量化入 Qdrant；JSON 只建 PostgreSQL 倒排索引。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
+> 把 PDF / Word / Excel / CSV / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块、Excel/CSV 按 sheet 转行组 Markdown 表格），切成语义完整的检索块后向量化入 Qdrant；JSON / Excel / CSV 只建 PostgreSQL tsvector 倒排索引（`INDEX_TYPE = "bm25"`），跳过 embedding 与 Qdrant。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.162%2B-009688)](https://fastapi.tiangolo.com/)
@@ -175,7 +175,7 @@ print(result.raw_text)      # 完整 markdown 文本
 | HTML 解析  | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退                            |
 | TXT 解析   | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                                        |
 | JSON 解析  | `src/parsers/json_parser.py`                 | 一条记录一个 chunk，字段名拆词，只走 BM25 倒排索引                                  |
-| Excel 解析 | `src/parsers/excel_parser.py`                | csv/xlsx/xls，sheet 转 Markdown 表格，行组预分块（每块重复表头）                    |
+| Excel 解析 | `src/parsers/excel_parser.py`                | csv/xlsx/xls，sheet 转 Markdown 表格，行组预分块（每块重复表头），只走 BM25 倒排索引 |
 | 图片解析   | `src/parsers/image_parser.py`                | VLM 提取描述/OCR，拼成文本走向量检索（以文字找图）                                  |
 | 表格处理   | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                                        |
 | 清洗       | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                                              |
@@ -295,6 +295,19 @@ JSON 结构强、字段名可精确匹配，**不走向量索引**（`INDEX_TYPE
 - 字段渲染为 `key: value`；camelCase / snake_case 额外输出拆词形式（如 `errorCode (error code): E1024`），保证 BM25 能按词命中
 - 解析器直接产出 `chunks`，不再经 TextChunker 二次切分，避免多条记录挤进同一块稀释 `ts_rank`
 - 超过 1000 字符的记录按字段行继续切；嵌套深度、单值长度均有上限
+
+**准确率实测**（100 条产品目录 JSON → 100 chunks，20 条查询含精确+语义各半，Hit@K 按关键词命中数/总关键词数计）：
+
+| 检索方式 | Hit@1 | Hit@3 | Hit@5 | 平均查询延迟 | 入库耗时（100 chunks） |
+|----------|-------|-------|-------|-------------|---------------------|
+| **BM25-only**（当前方案） | 64.6% | 68.8% | 85.4% | ~5ms（PG tsrank，预建索引） | ~300ms |
+| **混合**（BM25+向量+RRF） | 70.8% | 72.9% | 87.5% | ~170ms（含查询 embedding） | ~7.3s（多花 embedding 6.9s） |
+
+按查询类型拆分：
+- **精确查询**（型号/ID/数值）：BM25 88.0% vs 混合 100.0% — 混合略优，但 BM25 已足够准
+- **语义查询**（"国产 AI 加速芯片"等）：BM25 47.8% vs 混合 43.5% — **BM25 反而更强**，因为 JSON 字段名（"低功耗"、"国产AI"等）短而精确，分词后直接命中，向量对短字段编码效果不占优
+
+结论：Hit@3 差距仅 4.1%，但 BM25-only 入库快 **24×**、检索快 **34×**、零 embedding API 开销。JSON 字段名可精确匹配的结构特性决定了 BM25 是性价比最高的选择。
 
 ### ExcelParser
 
