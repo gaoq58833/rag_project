@@ -152,7 +152,7 @@ print(result.raw_text)      # 完整 markdown 文本
 
 ## 🔄 处理流程
 
-```
+```text
 原始文件 ──> 解析器 ──> markdown / JSON 记录 / 图片描述 ──> 清洗 ──> 分块器 ──> chunks
               │                                            │
               └── 图片存 data/images/                       ├──> PostgreSQL（完整 chunk 数据）
@@ -358,7 +358,7 @@ chunks = chunker.split(markdown_text)
 
 ### 入库（ingest）
 
-```
+```text
 文件 → 计算 SHA-256(content_hash) → 查表是否已存在相同 hash？
   ├─ 存在 → 复用已有 chunks + Qdrant 向量，跳过解析/分块/向量化
   └─ 不存在 → 解析 → 分块 → 向量化(content) → 同时写入：
@@ -373,7 +373,7 @@ chunks = chunker.split(markdown_text)
 
 ### 检索（retrieve）
 
-```
+```text
 query → embed → Qdrant.query_points(top_k=10, user_id 过滤) ─┐
        → jieba 分词 → PG tsvector BM25(top_k=15) ───────────┴─> RRF 融合(k=60)
                                                               → 回查 PG → rerank(top_n=3) → 返回
@@ -386,7 +386,7 @@ query → embed → Qdrant.query_points(top_k=10, user_id 过滤) ─┐
 
 ### 问答（chat）
 
-```
+```text
 retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生成 → answer + sources
                 ↑
         问答缓存：同用户同问题+同历史 10 分钟内直接返回（跳过检索+LLM）
@@ -674,7 +674,7 @@ python 量化/eval_generation_ragas.py alice /tmp/eval_dataset_100.json 30
 
 ## 📁 目录结构
 
-```
+```text
 src/
   api/                FastAPI 接口
     main.py           应用入口与路由
