@@ -15,6 +15,7 @@ from src.parsers.html_parser import HTMLParser
 from src.parsers.txt_parser import TXTParser
 from src.parsers.json_parser import JSONParser
 from src.parsers.image_parser import ImageParser
+from src.parsers.excel_parser import ExcelParser
 
 # 扩展名（小写，含点）-> 解析器类
 _PARSER_REGISTRY: Dict[str, Type[BaseParser]] = {
@@ -31,6 +32,9 @@ _PARSER_REGISTRY: Dict[str, Type[BaseParser]] = {
     ".jpeg": ImageParser,
     ".png": ImageParser,
     ".webp": ImageParser,
+    ".csv": ExcelParser,
+    ".xlsx": ExcelParser,
+    ".xls": ExcelParser,
 }
 
 # 单例缓存：默认参数的解析器只创建一次

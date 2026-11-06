@@ -1,10 +1,10 @@
 # 📄 RAG 文档处理管线
 
-> 把 PDF / Word / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块），切成语义完整的检索块后向量化入 Qdrant；JSON 只建 PostgreSQL 倒排索引。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
+> 把 PDF / Word / Excel / CSV / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块），切成语义完整的检索块后向量化入 Qdrant；JSON 只建 PostgreSQL 倒排索引。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.162%2B-009688)](https://fastapi.tiangolo.com/)
-[![Formats](https://img.shields.io/badge/formats-PDF%20%7C%20DOCX%20%7C%20MD%20%7C%20HTML%20%7C%20TXT%20%7C%20JSON%20%7C%20IMG-orange)]()
+[![Formats](https://img.shields.io/badge/formats-PDF%20%7C%20DOCX%20%7C%20XLSX%20%7C%20CSV%20%7C%20MD%20%7C%20HTML%20%7C%20TXT%20%7C%20JSON%20%7C%20IMG-orange)]()
 [![Vector DB](https://img.shields.io/badge/vector-Qdrant-purple)]()
 [![DB](https://img.shields.io/badge/db-PostgreSQL-blue)]()
 [![License](https://img.shields.io/badge/license-Unlicense-lightgrey)]()
@@ -13,7 +13,7 @@
 
 ## ✨ 功能特性
 
-- **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Markdown、HTML、TXT、JSON、图片（VLM 描述 + OCR）一站式覆盖
+- **多格式解析**：PDF（docling 版式模型）、Word（python-docx）、Excel/CSV（pandas，行组预分块）、Markdown、HTML、TXT、JSON、图片（VLM 描述 + OCR）一站式覆盖
 - **以图搜图**：图片入库时额外写入多模态向量集合（multimodal-embedding-v1），`POST /search/image` 上传图片按视觉相似度检索，与文本检索双集合隔离互不干扰
 - **智能分块**：段落优先的级联降级策略（段落 → 句子 → 字符），表格原子化、图片归属、章节路径溯源
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
@@ -32,7 +32,7 @@
 
 ## 📊 量化指标（100+ 文档实测）
 
-> 覆盖 PDF / Word / Markdown / HTML / TXT / JSON / 图片 多格式样本，100+ 文档实测结论。
+> 覆盖 PDF / Word / Excel / CSV / Markdown / HTML / TXT / JSON / 图片 多格式样本，100+ 文档实测结论。
 
 ### 解析准确率
 
@@ -158,7 +158,7 @@ print(result.raw_text)      # 完整 markdown 文本
               └── 图片存 data/images/                       ├──> PostgreSQL（完整 chunk 数据）
                                                            └──> 向量化 ──> Qdrant（向量 + 最小 payload）
 
-注：JSON 由解析器直接产出 chunks 且只建倒排；图片走向量 + 倒排，均跳过通用 chunker。
+注：JSON / Excel 由解析器直接产出 chunks（JSON 只建倒排，Excel 走向量+倒排）；图片走向量 + 倒排，均跳过通用 chunker。
 
 检索： query ──> 向量化 ──> Qdrant 语义召回(top_k=10) ─┐
          └──> jieba 分词 ──> PG tsvector BM25 召回(top_k=15) ─┴─> RRF 融合
@@ -175,6 +175,7 @@ print(result.raw_text)      # 完整 markdown 文本
 | HTML 解析  | `src/parsers/html_parser.py`                 | 去除 `<script>`/`<style>`，正文转 markdown，编码自动回退                            |
 | TXT 解析   | `src/parsers/txt_parser.py`                  | 纯文本按段落切分，不做标题入栈，编码自动回退                                        |
 | JSON 解析  | `src/parsers/json_parser.py`                 | 一条记录一个 chunk，字段名拆词，只走 BM25 倒排索引                                  |
+| Excel 解析 | `src/parsers/excel_parser.py`                | csv/xlsx/xls，sheet 转 Markdown 表格，行组预分块（每块重复表头）                    |
 | 图片解析   | `src/parsers/image_parser.py`                | VLM 提取描述/OCR，拼成文本走向量检索（以文字找图）                                  |
 | 表格处理   | `src/parsers/table_parser.py`                | 跨页表合并、markdown ↔ DataFrame、表格转文本                                        |
 | 清洗       | `src/parsers/cleaner.py`                     | 去页码/分隔线/零宽字符                                                              |
@@ -294,6 +295,21 @@ JSON 结构强、字段名可精确匹配，**不走向量索引**（`INDEX_TYPE
 - 字段渲染为 `key: value`；camelCase / snake_case 额外输出拆词形式（如 `errorCode (error code): E1024`），保证 BM25 能按词命中
 - 解析器直接产出 `chunks`，不再经 TextChunker 二次切分，避免多条记录挤进同一块稀释 `ts_rank`
 - 超过 1000 字符的记录按字段行继续切；嵌套深度、单值长度均有上限
+
+### ExcelParser
+
+```python
+from src.parsers.excel_parser import ExcelParser
+
+result = ExcelParser().parse("test_file/xxx.xlsx")
+```
+
+覆盖 `.csv` / `.xlsx` / `.xls`：每个 sheet 转成 Markdown 表格，按行组预分块走向量 + 倒排混合索引（与 Word 表格一致）：
+
+- 单行语义依赖表头，因此**每个 chunk 都重复表头**，以「表头 + 若干行」为最小检索单元（`type="table"`），单块上限 1500 字符
+- `section` 记录 sheet 名，多块的 sheet 额外标注行区间（如 `员工 第51-100行`），便于溯源
+- csv 按 `utf-8-sig → utf-8 → gb18030` 回退解码，分隔符自动嗅探；xlsx 走 openpyxl，xls 走 xlrd
+- 全空行/列丢弃；单元格内换行压平、竖线转义，NaN 置空；多 sheet 逐个解析，`tables` 按 sheet 给出完整 Markdown
 
 ### ImageParser
 
@@ -598,6 +614,7 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 | `python tests/test_html.py`     | HTML 解析 → 分块 → 写 `data/html_test/`        |
 | `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`          |
 | `python tests/test_json.py`     | JSON 解析：记录级分块、字段拆词、索引类型      |
+| `python tests/test_excel.py`    | Excel/CSV 解析：多 sheet、行组分块、多编码     |
 | `python tests/test_image.py`    | 图片解析：VLM 描述（mock）、原图落盘、向量索引 |
 | `python tests/test_image_search.py` | 以图搜图：多模态 embedding（mock）、图片集合检索、用户隔离 |
 | `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理   |
@@ -688,6 +705,7 @@ src/
     html_parser.py    HTML 转 markdown
     txt_parser.py     纯文本解析（段落策略）
     json_parser.py    JSON 解析（记录级分块，BM25）
+    excel_parser.py   Excel/CSV 解析（行组预分块）
     image_parser.py   图片解析（VLM 描述 + OCR，向量检索）
     table_parser.py   表格合并与转换
     cleaner.py        文本清洗

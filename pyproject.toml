@@ -26,6 +26,7 @@ dependencies = [
   "python-jose[cryptography]>=3.3.0",
   "bcrypt>=4.0.0",
   "jieba>=0.42.1",  # 中文分词，供 BM25 全文检索建索引
+  "xlrd>=2.0.1",
 ]
 
 [tool.uv.sources]
@@ -49,3 +50,8 @@ explicit = true
 name = "pypi"
 url = "https://pypi.org/simple"
 default = true
+
+[dependency-groups]
+dev = [
+    "xlwt>=1.3.0",
+]
