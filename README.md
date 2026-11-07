@@ -3,6 +3,7 @@
 > 把 PDF / Word / Excel / CSV / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块、Excel/CSV 按 sheet 转行组 Markdown 表格），切成语义完整的检索块后向量化入 Qdrant；JSON / Excel / CSV 只建 PostgreSQL tsvector 倒排索引（`INDEX_TYPE = "bm25"`），跳过 embedding 与 Qdrant。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
+[![CI](https://github.com/gaoq58833/rag_project/actions/workflows/ci.yml/badge.svg)](https://github.com/gaoq58833/rag_project/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.162%2B-009688)](https://fastapi.tiangolo.com/)
 [![Formats](https://img.shields.io/badge/formats-PDF%20%7C%20DOCX%20%7C%20XLSX%20%7C%20CSV%20%7C%20MD%20%7C%20HTML%20%7C%20TXT%20%7C%20JSON%20%7C%20IMG-orange)]()
 [![Vector DB](https://img.shields.io/badge/vector-Qdrant-purple)]()
@@ -83,7 +84,7 @@
 ### 1. 安装依赖
 
 ```bash
-git clone <仓库地址>
+git clone https://github.com/gaoq58833/rag_project.git
 cd rag_project
 uv sync
 ```
