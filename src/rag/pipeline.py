@@ -257,9 +257,9 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
         DocumentRepository.mark_failed(document_id, str(e))
 
 
-def _ms(seconds: float) -> float:
-    """秒转毫秒，保留 1 位小数（耗时上报统一口径）"""
-    return round(seconds * 1000, 1)
+def _sec(dt: float) -> float:
+    """耗时统一上报为秒，保留 3 位小数（即毫秒精度）"""
+    return round(dt, 3)
 
 
 def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: bool = True,
@@ -306,13 +306,13 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
     t_bm25 = time.perf_counter()
     if timings is not None:
         timings.update({
-            "embed_query_ms": _ms(t_embed - t_start),
-            "vector_search_ms": _ms(t_vector - t_embed),
-            "bm25_ms": _ms(t_bm25 - t_vector),
+            "embed_query_s": _sec(t_embed - t_start),
+            "vector_search_s": _sec(t_vector - t_embed),
+            "bm25_s": _sec(t_bm25 - t_vector),
         })
     if not merged_ids:
         if timings is not None:
-            timings["retrieve_total_ms"] = _ms(t_bm25 - t_start)
+            timings["retrieve_total_s"] = _sec(t_bm25 - t_start)
         return []
 
     # 4. 回 PG 取完整数据
@@ -321,10 +321,10 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
     pg_map = {str(r["qdrant_point_id"]): r for r in pg_rows}
     merged_ids = [pid for pid in merged_ids if pid in pg_map]
     if timings is not None:
-        timings["pg_fetch_ms"] = _ms(t_pg - t_bm25)
+        timings["pg_fetch_s"] = _sec(t_pg - t_bm25)
     if not merged_ids:
         if timings is not None:
-            timings["retrieve_total_ms"] = _ms(t_pg - t_start)
+            timings["retrieve_total_s"] = _sec(t_pg - t_start)
         return []
 
     # 5. 重排（用 content 文本重排，从融合候选中取 top_n）
@@ -336,8 +336,8 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
         merged_ids = merged_ids[:settings.rerank_top_n]
     t_rerank = time.perf_counter()
     if timings is not None:
-        timings["rerank_ms"] = _ms(t_rerank - t_pg)
-        timings["retrieve_total_ms"] = _ms(t_rerank - t_start)
+        timings["rerank_s"] = _sec(t_rerank - t_pg)
+        timings["retrieve_total_s"] = _sec(t_rerank - t_start)
 
     results = []
     for pid in merged_ids:
@@ -450,10 +450,10 @@ def _chat_cache_key(query: str, user_id: str, history: List[dict], use_rerank: b
 def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bool = True) -> Dict[str, Any]:
     """检索 + LLM 生成（带缓存），不做落库
 
-    返回值额外带 timings（各阶段耗时，毫秒）：
-      - cached=True 时只有 total_ms（缓存查询本身的开销）
-      - 未命中时含 embed_query_ms / vector_search_ms / bm25_ms / pg_fetch_ms /
-        rerank_ms / retrieve_total_ms / llm_ms / total_ms
+    返回值额外带 timings（各阶段耗时，秒，3 位小数）：
+      - cached=True 时只有 total_s（缓存查询本身的开销）
+      - 未命中时含 embed_query_s / vector_search_s / bm25_s / pg_fetch_s /
+        rerank_s / retrieve_total_s / llm_s / total_s
     """
     t_start = time.perf_counter()
     cache_key = _chat_cache_key(query, user_id, history, use_rerank)
@@ -462,7 +462,7 @@ def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bo
         return {
             "answer": cached["answer"],
             "sources": cached["sources"],
-            "timings": {"cached": True, "total_ms": _ms(time.perf_counter() - t_start)},
+            "timings": {"cached": True, "total_s": _sec(time.perf_counter() - t_start)},
         }
 
     timings: Dict[str, Any] = {}
@@ -486,9 +486,9 @@ def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bo
 
     t_llm = time.perf_counter()
     answer = llm_client.chat(messages)
-    timings["llm_ms"] = _ms(time.perf_counter() - t_llm)
+    timings["llm_s"] = _sec(time.perf_counter() - t_llm)
     timings["cached"] = False
-    timings["total_ms"] = _ms(time.perf_counter() - t_start)
+    timings["total_s"] = _sec(time.perf_counter() - t_start)
 
     # 缓存只存答案与来源，耗时每次重新统计
     _chat_cache.set(cache_key, {"answer": answer, "sources": sources})
@@ -539,7 +539,7 @@ def chat(
     ConversationRepository.touch(conversation_id)
 
     # 5. 服务端总耗时 = 请求进入 → 检索/生成 + 落库全部完成
-    timings["total_ms"] = _ms(time.perf_counter() - t_start)
+    timings["total_s"] = _sec(time.perf_counter() - t_start)
 
     return {
         "answer": answer,
@@ -562,9 +562,9 @@ def chat_stream(
       - {"type": "token", "content": str}  (多次)
       - {"type": "done", "timings": dict}
 
-    timings（毫秒）：embed_query_ms / vector_search_ms / bm25_ms / pg_fetch_ms /
-    rerank_ms / retrieve_total_ms / llm_ttft_ms（模型首字延迟）/ llm_ms（生成总时长）/
-    total_ms（服务端从接收到全部完成的总耗时）；缓存命中时 cached=True。
+    timings（秒，3 位小数）：embed_query_s / vector_search_s / bm25_s / pg_fetch_s /
+    rerank_s / retrieve_total_s / llm_ttft_s（模型首字延迟）/ llm_s（生成总时长）/
+    total_s（服务端从接收到全部完成的总耗时）；缓存命中时 cached=True。
     """
     t_start = time.perf_counter()
 
@@ -621,12 +621,12 @@ def chat_stream(
         answer_parts = []
         t_llm = time.perf_counter()
         for token in llm_client.chat_stream(messages):
-            if "llm_ttft_ms" not in timings:
-                timings["llm_ttft_ms"] = _ms(time.perf_counter() - t_llm)
+            if "llm_ttft_s" not in timings:
+                timings["llm_ttft_s"] = _sec(time.perf_counter() - t_llm)
             answer_parts.append(token)
             yield {"type": "token", "content": token}
         answer = "".join(answer_parts)
-        timings["llm_ms"] = _ms(time.perf_counter() - t_llm)
+        timings["llm_s"] = _sec(time.perf_counter() - t_llm)
         timings["cached"] = False
         _chat_cache.set(cache_key, {"answer": answer, "sources": sources})
 
@@ -641,6 +641,6 @@ def chat_stream(
     ConversationRepository.touch(conversation_id)
 
     # 5. 总耗时 = 从接收请求到落库完成
-    timings["total_ms"] = _ms(time.perf_counter() - t_start)
+    timings["total_s"] = _sec(time.perf_counter() - t_start)
 
     yield {"type": "done", "timings": timings}

@@ -24,7 +24,8 @@
 - **内容去重**：入库时计算文件 SHA-256，相同内容只向量化一次，多用户共享向量，删除时按引用计数安全清理
 - **用户隔离**：文档/对话按 user_id 归属，只能查看和删除自己的资源
 - **业务库**：完整 chunk 数据入 PostgreSQL（JSONB），Qdrant 只存向量 + 最小 payload，检索后回查 PG
-- **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染、引用来源与链路耗时展示
+- **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染（「正在搜索知识库 → 正在生成回答」动态状态提示）、引用来源与链路耗时展示
+- **用户头像**：顶栏点击上传自定义头像（jpg/jpeg/png/webp/gif，≤2MB），顶栏与聊天消息实时显示；URL 带 `?v=` 版本号，换头像后浏览器不读旧缓存
 - **REST API**：FastAPI + uvicorn，Swagger 文档自动生成
 - **容器化部署**：Docker Compose 一键启动（postgres + qdrant + rag-api）
 
@@ -425,17 +426,17 @@ retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生�
 
 - **普通模式** (`/chat`)：一次性返回完整 `{answer, sources, conversation_id, timings}`
 - **流式模式** (`/chat/stream`)：SSE 逐 token 返回，事件类型 `start` / `token` / `done` / `error`；`start` 与 `done` 均带 `timings`
-- **链路耗时**：`timings` 记录各阶段毫秒数（`embed_query_ms` / `vector_search_ms` / `bm25_ms` / `pg_fetch_ms` / `rerank_ms` / `retrieve_total_ms` / `llm_ttft_ms` 首字延迟 / `llm_ms` 生成时长 / `total_ms` 服务端总耗时），前端在回答下方渲染耗时条，并额外展示浏览器端到端耗时
+- **链路耗时**：`timings` 记录各阶段耗时（单位秒，保留 3 位小数即毫秒精度）：`embed_query_s` / `vector_search_s` / `bm25_s` / `pg_fetch_s` / `rerank_s` / `retrieve_total_s` / `llm_ttft_s` 首字延迟 / `llm_s` 生成时长 / `total_s` 服务端总耗时；前端在回答下方渲染耗时条，并额外展示浏览器端到端耗时
 
 ```json
 {
-  "embed_query_ms": 42.0, "vector_search_ms": 2.1, "bm25_ms": 3.4, "pg_fetch_ms": 1.2,
-  "rerank_ms": 61.0, "retrieve_total_ms": 109.7, "llm_ttft_ms": 320.5,
-  "llm_ms": 1420.3, "total_ms": 1790.8, "cached": false
+  "embed_query_s": 0.042, "vector_search_s": 0.002, "bm25_s": 0.003, "pg_fetch_s": 0.001,
+  "rerank_s": 0.061, "retrieve_total_s": 0.110, "llm_ttft_s": 0.321,
+  "llm_s": 1.420, "total_s": 1.791, "cached": false
 }
 ```
 
-- 缓存命中时 `cached=true`，只有 `total_ms`（确实没有检索与生成）；前端会显示「缓存命中 跳过检索与生成」
+- 缓存命中时 `cached=true`，只有 `total_s`（确实没有检索与生成）；前端会显示「缓存命中 跳过检索与生成」
 - **缓存键**：`sha256(user_id + query + use_rerank + 历史摘要)`，多轮上下文不同则不命中
 - **文档变更失效**：ingest/delete 时清空缓存，保证答案新鲜度
 
@@ -445,7 +446,7 @@ retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生�
 | --------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `documents`     | id, user_id(FK), filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, uploaded_at | 每个上传文件一条，content_hash 用于去重        |
 | `chunks`        | id, document_id(FK), qdrant_point_id, chunk_index, content, length, chunk_type, section, images(JSONB)          | 每个分块一条，通过 qdrant_point_id 关联 Qdrant |
-| `users`         | id, username, password_hash, created_at                                                                         | 用户表，bcrypt 存储密码                        |
+| `users`         | id, username, password_hash, role, avatar_url, created_at                                                       | 用户表，bcrypt 存储密码，avatar_url 为头像路径 |
 | `conversations` | id, user_id(FK), title, created_at, updated_at                                                                  | 对话表，按用户隔离                             |
 | `messages`      | id, conversation_id(FK), role, content, sources(JSONB), created_at                                              | 消息表，user/assistant 消息 + 引用来源         |
 
@@ -475,7 +476,8 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 | POST   | `/chunk`                       | 否   | 上传文件 → 解析并分块，返回 `chunks` 列表                               |
 | POST   | `/auth/register`               | 否   | 用户注册，返回 JWT token                                                |
 | POST   | `/auth/login`                  | 否   | 用户名密码登录，返回 JWT token                                          |
-| GET    | `/auth/me`                     | 是   | 获取当前登录用户信息                                                    |
+| GET    | `/auth/me`                     | 是   | 获取当前登录用户信息（含 `avatar_url`）                                 |
+| POST   | `/users/me/avatar`             | 是   | 上传当前用户头像（jpg/jpeg/png/webp/gif，≤2MB），覆盖旧头像             |
 | POST   | `/ingest`                      | 是   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant（自动内容去重） |
 | GET    | `/documents`                   | 是   | 获取当前用户的文档列表（用户隔离）                                      |
 | DELETE | `/documents/{id}`              | 是   | 删除文档及其向量（共享向量按引用计数安全清理）                          |
@@ -495,6 +497,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 `/chunk` 支持查询参数覆盖分块大小：`?max_chunk_size=800&min_chunk_size=100&chunk_overlap=150`。
 `/retrieve` 支持 `?query=xxx&top_k=10&use_rerank=true`。
 `/search/image` 用 multipart 上传图片，支持 `?top_k=10`，返回相似图片的 VLM 描述、`images` 原图路径与余弦相似度 `score`。
+`/users/me/avatar` 用 multipart 上传头像；登录与 `/auth/me` 响应的 `avatar_url` 带 `?v=<文件修改时间>` 版本号，头像文件存于 `data/avatars/` 并通过 `/avatars/` 静态路径访问。
 `/chat` 请求体：`{"query": "...", "use_rerank": true, "conversation_id": "可选"}`。
 
 ### 调用示例

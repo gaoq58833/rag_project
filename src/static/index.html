@@ -28,7 +28,7 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
   overflow: hidden;
 }
@@ -95,7 +95,7 @@ button.danger:hover:not(:disabled) {
 
 input, textarea {
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 14px;
   background: var(--bg-2);
   color: var(--green);
   border: 1px solid var(--border);
@@ -370,15 +370,32 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
   border: 1px solid var(--green-dim);
   font-size: 11px;
   color: var(--green);
+  overflow: hidden;
 }
 .msg.user .msg-role { border-color: var(--cyan); color: var(--cyan); }
+.avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* 顶栏头像（点击更换） */
+.topbar-avatar {
+  width: 26px; height: 26px;
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+.topbar-avatar:hover { box-shadow: 0 0 8px rgba(0, 229, 255, 0.4); }
 .msg-body { flex: 1; min-width: 0; }
 .msg-body pre {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.7;
 }
 .msg-sources {
@@ -422,6 +439,17 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
 .thinking span:nth-child(2) { animation-delay: 0.2s; }
 .thinking span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes think { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1)} }
+
+/* 搜索/生成状态提示 */
+.searching { display: inline-flex; align-items: center; gap: 10px; }
+.searching .searching-text {
+  color: var(--amber);
+  font-size: 13px;
+  letter-spacing: 2px;
+  animation: searchPulse 1.2s ease-in-out infinite;
+  text-shadow: 0 0 6px rgba(255, 176, 0, 0.4);
+}
+@keyframes searchPulse { 0%,100%{opacity:0.45} 50%{opacity:1} }
 
 /* 输入区 */
 .chat-input-bar {
@@ -487,6 +515,8 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
     </div>
     <div class="topbar-right">
       <span class="user-info"><span class="status-dot"></span><span id="current-user">guest</span></span>
+      <span class="topbar-avatar" id="topbar-avatar" title="点击更换头像" onclick="document.getElementById('avatar-input').click()">U</span>
+      <input type="file" id="avatar-input" accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" onchange="uploadAvatar(this)">
       <button class="danger" onclick="doLogout()">登出</button>
     </div>
   </div>
@@ -548,6 +578,20 @@ function getToken() { return localStorage.getItem('rag_token'); }
 function setToken(t) { localStorage.setItem('rag_token', t); }
 function clearToken() { localStorage.removeItem('rag_token'); }
 
+// 头像：localStorage 持久化 + 顶栏渲染
+function getAvatar() { return localStorage.getItem('rag_avatar') || ''; }
+function setAvatar(url) {
+  if (url) localStorage.setItem('rag_avatar', url);
+  else localStorage.removeItem('rag_avatar');
+  renderTopbarAvatar();
+}
+function renderTopbarAvatar() {
+  const el = document.getElementById('topbar-avatar');
+  const url = getAvatar();
+  const fallback = (localStorage.getItem('rag_username') || 'U')[0].toUpperCase();
+  el.innerHTML = url ? `<img class="avatar-img" src="${url}" alt="">` : fallback;
+}
+
 async function api(method, path, body, isForm = false) {
   const headers = {};
   const token = getToken();
@@ -590,6 +634,7 @@ async function doLogin() {
     const data = await api('POST', '/auth/login', { username, password });
     setToken(data.access_token);
     localStorage.setItem('rag_username', data.username);
+    setAvatar(data.avatar_url);
     enterApp();
   } catch (e) { setAlert(e.message); }
 }
@@ -603,6 +648,7 @@ async function doRegister() {
     const data = await api('POST', '/auth/register', { username, password });
     setToken(data.access_token);
     localStorage.setItem('rag_username', data.username);
+    setAvatar(data.avatar_url);
     enterApp();
   } catch (e) { setAlert(e.message); }
 }
@@ -612,15 +658,36 @@ function setAlert(msg) { document.getElementById('login-alert').textContent = ms
 function doLogout() {
   clearToken();
   localStorage.removeItem('rag_username');
+  localStorage.removeItem('rag_avatar');
   showLogin();
   setAlert('');
 }
 
 async function enterApp() {
   document.getElementById('current-user').textContent = localStorage.getItem('rag_username') || 'user';
+  renderTopbarAvatar();
   showApp();
+  // 拉取最新用户信息（页面刷新时同步最新头像；登录进来时也会兜底）
+  try {
+    const me = await api('GET', '/auth/me');
+    setAvatar(me.avatar_url);
+  } catch (e) { console.error(e); }
   await loadDocuments();
   await loadConversations();
+}
+
+// 上传头像
+async function uploadAvatar(input) {
+  const file = input.files[0];
+  input.value = '';  // 清空，允许重复选择同一文件
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) return alert('头像文件不能超过 2MB');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const data = await api('POST', '/users/me/avatar', form, true);
+    setAvatar(data.avatar_url);
+  } catch (e) { alert('上传头像失败: ' + e.message); }
 }
 
 // ============ Tab 切换 ============
@@ -774,14 +841,14 @@ function onChatKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 }
 
-function fmtMs(ms) {
-  if (ms === null || ms === undefined) return '';
-  if (ms >= 1000) return (ms / 1000).toFixed(2) + ' s';
-  return (Math.round(ms * 10) / 10) + ' ms';
+function fmtSec(s) {
+  if (s === null || s === undefined) return '';
+  if (s >= 1) return s.toFixed(2) + ' s';
+  return s.toFixed(3) + ' s';
 }
 
-// 渲染链路耗时条：t 为服务端 timings，clientMs 为浏览器端到端耗时
-function timingHtml(t, clientMs) {
+// 渲染链路耗时条：t 为服务端 timings（秒），clientSec 为浏览器端到端耗时（秒）
+function timingHtml(t, clientSec) {
   const chips = [];
   const add = (label, value, cls = '') =>
     chips.push(`<span class="chip ${cls}"><b>${label}</b> ${value}</span>`);
@@ -789,17 +856,17 @@ function timingHtml(t, clientMs) {
   if (t && t.cached) {
     add('缓存命中', '跳过检索与生成');
   } else if (t) {
-    if (t.embed_query_ms != null) add('向量化', fmtMs(t.embed_query_ms));
-    if (t.vector_search_ms != null) add('向量召回', fmtMs(t.vector_search_ms));
-    if (t.bm25_ms != null) add('BM25', fmtMs(t.bm25_ms));
-    if (t.pg_fetch_ms != null) add('PG 回查', fmtMs(t.pg_fetch_ms));
-    if (t.rerank_ms != null) add('重排', fmtMs(t.rerank_ms));
-    if (t.retrieve_total_ms != null) add('检索合计', fmtMs(t.retrieve_total_ms));
-    if (t.llm_ttft_ms != null) add('首字延迟', fmtMs(t.llm_ttft_ms));
-    if (t.llm_ms != null) add('LLM 生成', fmtMs(t.llm_ms));
+    if (t.embed_query_s != null) add('向量化', fmtSec(t.embed_query_s));
+    if (t.vector_search_s != null) add('向量召回', fmtSec(t.vector_search_s));
+    if (t.bm25_s != null) add('BM25', fmtSec(t.bm25_s));
+    if (t.pg_fetch_s != null) add('PG 回查', fmtSec(t.pg_fetch_s));
+    if (t.rerank_s != null) add('重排', fmtSec(t.rerank_s));
+    if (t.retrieve_total_s != null) add('检索合计', fmtSec(t.retrieve_total_s));
+    if (t.llm_ttft_s != null) add('首字延迟', fmtSec(t.llm_ttft_s));
+    if (t.llm_s != null) add('LLM 生成', fmtSec(t.llm_s));
   }
-  if (clientMs != null) add('端到端', fmtMs(clientMs), 'total');
-  if (t && t.total_ms != null) add('服务端总计', fmtMs(t.total_ms), 'total');
+  if (clientSec != null) add('端到端', fmtSec(clientSec), 'total');
+  if (t && t.total_s != null) add('服务端总计', fmtSec(t.total_s), 'total');
   if (!chips.length) return '';
 
   return `<div class="msg-timings"><div class="timing-label">// 链路耗时</div>` +
@@ -820,7 +887,7 @@ async function sendMessage() {
   const aiDiv = document.createElement('div');
   aiDiv.className = 'msg assistant';
   aiDiv.id = aiId;
-  aiDiv.innerHTML = `<div class="msg-role">AI</div><div class="msg-body"><div class="thinking"><span></span><span></span><span></span></div></div>`;
+  aiDiv.innerHTML = `<div class="msg-role">AI</div><div class="msg-body"><div class="searching"><span class="searching-text">正在搜索知识库</span><span class="thinking"><span></span><span></span><span></span></span></div></div>`;
   box.appendChild(aiDiv);
   box.scrollTop = box.scrollHeight;
 
@@ -870,14 +937,18 @@ async function sendMessage() {
           started = true;
           sources = event.sources || [];
           timings = event.timings || {};
-          // 替换思考动画为文本容器
+          // 检索完成，等待 LLM 首字：状态切换为"正在生成回答"
           const body = aiDiv.querySelector('.msg-body');
-          body.innerHTML = '<pre></pre>';
+          body.innerHTML = '<div class="searching"><span class="searching-text">正在生成回答</span><span class="thinking"><span></span><span></span><span></span></span></div>';
           if (!currentConvId && event.conversation_id) {
             currentConvId = event.conversation_id;
             loadConversations();
           }
         } else if (event.type === 'token') {
+          // 首个 token 到达：把状态提示替换为文本容器
+          if (!answerText) {
+            aiDiv.querySelector('.msg-body').innerHTML = '<pre></pre>';
+          }
           answerText += event.content;
           const pre = aiDiv.querySelector('pre');
           if (pre) pre.textContent = answerText;
@@ -894,8 +965,8 @@ async function sendMessage() {
             body.insertAdjacentHTML('beforeend', srcHtml);
           }
           // 追加链路耗时（服务端各阶段 + 浏览器端到端）
-          const clientMs = Math.round(performance.now() - t0);
-          const tgHtml = timingHtml(event.timings || timings, clientMs);
+          const clientSec = (performance.now() - t0) / 1000;
+          const tgHtml = timingHtml(event.timings || timings, clientSec);
           if (tgHtml) {
             body.insertAdjacentHTML('beforeend', tgHtml);
             box.scrollTop = box.scrollHeight;
@@ -913,7 +984,10 @@ function appendMessage(role, content, sources = []) {
   const box = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  const roleLabel = role === 'user' ? 'U' : 'AI';
+  const avatarUrl = role === 'user' ? getAvatar() : '';
+  const roleHtml = avatarUrl
+    ? `<img class="avatar-img" src="${avatarUrl}" alt="">`
+    : (role === 'user' ? 'U' : 'AI');
   let srcHtml = '';
   if (sources.length) {
     srcHtml = `<div class="msg-sources"><div class="src-label">// 来源</div>` +
@@ -921,7 +995,7 @@ function appendMessage(role, content, sources = []) {
       `</div>`;
   }
   div.innerHTML = `
-    <div class="msg-role">${roleLabel}</div>
+    <div class="msg-role">${roleHtml}</div>
     <div class="msg-body"><pre>${esc(content)}</pre>${srcHtml}</div>
   `;
   box.appendChild(div);

@@ -105,12 +105,14 @@ class AuthResponse(BaseModel):
     user_id: str
     username: str
     role: str
+    avatar_url: Optional[str] = None
 
 
 class UserInfo(BaseModel):
     id: str
     username: str
     role: str
+    avatar_url: Optional[str] = None
 
 
 # ===== 多轮对话相关 =====

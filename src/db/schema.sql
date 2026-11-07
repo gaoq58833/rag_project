@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 迁移：为已有 users 表补头像列（幂等）
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 
 -- 文档表：每个上传文件一条记录

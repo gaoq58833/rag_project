@@ -39,4 +39,5 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         "id": user["id"],
         "username": user["username"],
         "role": user["role"],
+        "avatar_url": user.get("avatar_url"),
     }

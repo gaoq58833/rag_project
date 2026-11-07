@@ -186,6 +186,14 @@ class UserRepository:
     def get_by_id(user_id: str) -> Optional[Dict[str, Any]]:
         return db.query_one("SELECT * FROM users WHERE id = %s", (user_id,))
 
+    @staticmethod
+    def set_avatar(user_id: str, avatar_url: Optional[str]) -> int:
+        """设置用户头像 URL（传 None 清除头像）"""
+        return db.execute(
+            "UPDATE users SET avatar_url = %s WHERE id = %s",
+            (avatar_url, user_id),
+        )
+
 
 class ConversationRepository:
     """对话表操作"""

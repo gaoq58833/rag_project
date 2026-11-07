@@ -96,13 +96,31 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# 用户头像目录（项目根 data/avatars）
+AVATAR_DIR = Path(__file__).resolve().parents[2] / "data" / "avatars"
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=str(AVATAR_DIR)), name="avatars")
+
+ALLOWED_AVATAR_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+MAX_AVATAR_SIZE = 2 * 1024 * 1024  # 2MB
+
+
+def _versioned_avatar_url(avatar_url: Optional[str]) -> Optional[str]:
+    """给头像 URL 加 ?v=<文件修改时间> 版本号，防止换新头像后浏览器仍用旧缓存"""
+    if not avatar_url:
+        return None
+    file_path = AVATAR_DIR / Path(avatar_url).name
+    if file_path.exists():
+        return f"{avatar_url}?v={int(file_path.stat().st_mtime)}"
+    return avatar_url
+
 
 @app.get("/", include_in_schema=False)
 async def root():
-    """根路径返回前端 index.html"""
+    """根路径返回前端 index.html（禁缓存，避免改前端后浏览器仍用旧版）"""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(str(index_file))
+        return FileResponse(str(index_file), headers={"Cache-Control": "no-cache"})
     return {
         "name": "RAG 文档解析 API",
         "version": "0.1.0",
@@ -241,6 +259,7 @@ async def login(request: LoginRequest):
         user_id=str(user["id"]),
         username=user["username"],
         role=user["role"],
+        avatar_url=_versioned_avatar_url(user.get("avatar_url")),
     )
 
 
@@ -251,7 +270,46 @@ async def login(request: LoginRequest):
 )
 async def me(current_user: dict = Depends(get_current_user)):
     """需要携带有效的 Authorization: Bearer <token>。"""
+    current_user["avatar_url"] = _versioned_avatar_url(current_user.get("avatar_url"))
     return UserInfo(**current_user)
+
+
+@app.post(
+    "/users/me/avatar",
+    response_model=UserInfo,
+    summary="上传当前用户头像",
+)
+async def upload_avatar(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """上传自定义头像（jpg/jpeg/png/webp/gif，≤2MB），覆盖旧头像。需登录。"""
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_AVATAR_EXTS:
+        raise HTTPException(status_code=400, detail="仅支持 jpg/jpeg/png/webp/gif 格式")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="文件内容为空")
+    if len(data) > MAX_AVATAR_SIZE:
+        raise HTTPException(status_code=400, detail="头像文件不能超过 2MB")
+
+    # 删除该用户的旧头像文件（新旧扩展名可能不同）
+    for old in AVATAR_DIR.glob(f"{current_user['id']}.*"):
+        old.unlink(missing_ok=True)
+
+    file_path = AVATAR_DIR / f"{current_user['id']}{ext}"
+    file_path.write_bytes(data)
+
+    avatar_url = f"/avatars/{file_path.name}"
+    UserRepository.set_avatar(current_user["id"], avatar_url)
+
+    return UserInfo(
+        id=current_user["id"],
+        username=current_user["username"],
+        role=current_user["role"],
+        avatar_url=_versioned_avatar_url(avatar_url),
+    )
 
 
 # ===== RAG 接口（需鉴权）=====
@@ -418,8 +476,8 @@ async def chat_stream_endpoint(request: ChatRequest, current_user: dict = Depend
       - {"type": "token", "content": "..."}  (多次)
       - {"type": "done", "timings": {...}}
 
-    timings 为各链路耗时（毫秒）：embed_query_ms / vector_search_ms / bm25_ms /
-    pg_fetch_ms / rerank_ms / retrieve_total_ms / llm_ttft_ms / llm_ms / total_ms；
+    timings 为各链路耗时（秒，3 位小数）：embed_query_s / vector_search_s / bm25_s /
+    pg_fetch_s / rerank_s / retrieve_total_s / llm_ttft_s / llm_s / total_s；
     缓存命中时 cached=true。
     """
     import json
