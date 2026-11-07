@@ -24,7 +24,7 @@
 - **内容去重**：入库时计算文件 SHA-256，相同内容只向量化一次，多用户共享向量，删除时按引用计数安全清理
 - **用户隔离**：文档/对话按 user_id 归属，只能查看和删除自己的资源
 - **业务库**：完整 chunk 数据入 PostgreSQL（JSONB），Qdrant 只存向量 + 最小 payload，检索后回查 PG
-- **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染、引用来源展示
+- **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染、引用来源与链路耗时展示
 - **REST API**：FastAPI + uvicorn，Swagger 文档自动生成
 - **容器化部署**：Docker Compose 一键启动（postgres + qdrant + rag-api）
 
@@ -423,8 +423,19 @@ retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生�
         问答缓存：同用户同问题+同历史 10 分钟内直接返回（跳过检索+LLM）
 ```
 
-- **普通模式** (`/chat`)：一次性返回完整 `{answer, sources, conversation_id}`
-- **流式模式** (`/chat/stream`)：SSE 逐 token 返回，事件类型 `start` / `token` / `done` / `error`
+- **普通模式** (`/chat`)：一次性返回完整 `{answer, sources, conversation_id, timings}`
+- **流式模式** (`/chat/stream`)：SSE 逐 token 返回，事件类型 `start` / `token` / `done` / `error`；`start` 与 `done` 均带 `timings`
+- **链路耗时**：`timings` 记录各阶段毫秒数（`embed_query_ms` / `vector_search_ms` / `bm25_ms` / `pg_fetch_ms` / `rerank_ms` / `retrieve_total_ms` / `llm_ttft_ms` 首字延迟 / `llm_ms` 生成时长 / `total_ms` 服务端总耗时），前端在回答下方渲染耗时条，并额外展示浏览器端到端耗时
+
+```json
+{
+  "embed_query_ms": 42.0, "vector_search_ms": 2.1, "bm25_ms": 3.4, "pg_fetch_ms": 1.2,
+  "rerank_ms": 61.0, "retrieve_total_ms": 109.7, "llm_ttft_ms": 320.5,
+  "llm_ms": 1420.3, "total_ms": 1790.8, "cached": false
+}
+```
+
+- 缓存命中时 `cached=true`，只有 `total_ms`（确实没有检索与生成）；前端会显示「缓存命中 跳过检索与生成」
 - **缓存键**：`sha256(user_id + query + use_rerank + 历史摘要)`，多轮上下文不同则不命中
 - **文档变更失效**：ingest/delete 时清空缓存，保证答案新鲜度
 

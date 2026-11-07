@@ -414,9 +414,13 @@ async def chat_stream_endpoint(request: ChatRequest, current_user: dict = Depend
     """流式问答接口，返回 SSE 事件流。
 
     事件格式（每行 `data: {json}\\n\\n`）：
-      - {"type": "start", "conversation_id": "...", "sources": [...]}
+      - {"type": "start", "conversation_id": "...", "sources": [...], "timings": {...}}
       - {"type": "token", "content": "..."}  (多次)
-      - {"type": "done"}
+      - {"type": "done", "timings": {...}}
+
+    timings 为各链路耗时（毫秒）：embed_query_ms / vector_search_ms / bm25_ms /
+    pg_fetch_ms / rerank_ms / retrieve_total_ms / llm_ttft_ms / llm_ms / total_ms；
+    缓存命中时 cached=true。
     """
     import json
 

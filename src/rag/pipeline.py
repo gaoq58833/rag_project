@@ -257,8 +257,13 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
         DocumentRepository.mark_failed(document_id, str(e))
 
 
+def _ms(seconds: float) -> float:
+    """秒转毫秒，保留 1 位小数（耗时上报统一口径）"""
+    return round(seconds * 1000, 1)
+
+
 def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: bool = True,
-             use_bm25: bool = True) -> List[dict]:
+             use_bm25: bool = True, timings: Optional[Dict[str, Any]] = None) -> List[dict]:
     """混合检索：向量召回 + BM25 关键词召回 → RRF 融合 → 重排 → 回 PostgreSQL 取完整 chunk
 
     - 向量路：语义相近（Qdrant，按 user_id 过滤）
@@ -267,16 +272,20 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
       JSON 文档只建了倒排索引（不写 Qdrant），因此只可能从 BM25 路召回
     - use_bm25=False 时走纯向量模式（跳过 BM25 与 RRF），用于检索策略 A/B 对比评测
        此时 JSON 文档不可见
+    - timings：传入 dict 时原地写入各阶段耗时（毫秒），供前端展示链路耗时
     返回：[{content, section, type, images, score, filename, index}, ...]
     """
     top_k = top_k or settings.retrieval_top_k
+    t_start = time.perf_counter()
 
     # 1. 向量召回（按 user_id 过滤，只召回当前用户的文档）
     query_vec = llm_client.embed_query(query)
+    t_embed = time.perf_counter()
     filter_ = Filter(must=[
         FieldCondition(key="user_id", match=MatchValue(value=user_id)),
     ])
     vec_candidates = vector_store.search(query_vec, top_k=top_k, filter_=filter_)
+    t_vector = time.perf_counter()
     vec_ids = [c["payload"]["qdrant_point_id"] for c in vec_candidates]
     # 向量路 payload 里的 filename，供结果组装
     filename_map = {c["payload"]["qdrant_point_id"]: c["payload"].get("filename", "") for c in vec_candidates}
@@ -294,14 +303,28 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
         # 纯向量模式：直接按向量相似度排序，分数为余弦相似度
         merged_ids = list(vec_ids)
         score_map = {c["payload"]["qdrant_point_id"]: c.get("score", 0.0) for c in vec_candidates}
+    t_bm25 = time.perf_counter()
+    if timings is not None:
+        timings.update({
+            "embed_query_ms": _ms(t_embed - t_start),
+            "vector_search_ms": _ms(t_vector - t_embed),
+            "bm25_ms": _ms(t_bm25 - t_vector),
+        })
     if not merged_ids:
+        if timings is not None:
+            timings["retrieve_total_ms"] = _ms(t_bm25 - t_start)
         return []
 
     # 4. 回 PG 取完整数据
     pg_rows = ChunkRepository.get_by_qdrant_ids(merged_ids)
+    t_pg = time.perf_counter()
     pg_map = {str(r["qdrant_point_id"]): r for r in pg_rows}
     merged_ids = [pid for pid in merged_ids if pid in pg_map]
+    if timings is not None:
+        timings["pg_fetch_ms"] = _ms(t_pg - t_bm25)
     if not merged_ids:
+        if timings is not None:
+            timings["retrieve_total_ms"] = _ms(t_pg - t_start)
         return []
 
     # 5. 重排（用 content 文本重排，从融合候选中取 top_n）
@@ -311,6 +334,10 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
         merged_ids = [merged_ids[i] for i in rerank_indices]
     else:
         merged_ids = merged_ids[:settings.rerank_top_n]
+    t_rerank = time.perf_counter()
+    if timings is not None:
+        timings["rerank_ms"] = _ms(t_rerank - t_pg)
+        timings["retrieve_total_ms"] = _ms(t_rerank - t_start)
 
     results = []
     for pid in merged_ids:
@@ -421,13 +448,25 @@ def _chat_cache_key(query: str, user_id: str, history: List[dict], use_rerank: b
 
 
 def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bool = True) -> Dict[str, Any]:
-    """检索 + LLM 生成（带缓存），不做落库"""
+    """检索 + LLM 生成（带缓存），不做落库
+
+    返回值额外带 timings（各阶段耗时，毫秒）：
+      - cached=True 时只有 total_ms（缓存查询本身的开销）
+      - 未命中时含 embed_query_ms / vector_search_ms / bm25_ms / pg_fetch_ms /
+        rerank_ms / retrieve_total_ms / llm_ms / total_ms
+    """
+    t_start = time.perf_counter()
     cache_key = _chat_cache_key(query, user_id, history, use_rerank)
     cached = _chat_cache.get(cache_key)
     if cached is not None:
-        return cached
+        return {
+            "answer": cached["answer"],
+            "sources": cached["sources"],
+            "timings": {"cached": True, "total_ms": _ms(time.perf_counter() - t_start)},
+        }
 
-    sources = retrieve(query, user_id=user_id, use_rerank=use_rerank)
+    timings: Dict[str, Any] = {}
+    sources = retrieve(query, user_id=user_id, use_rerank=use_rerank, timings=timings)
 
     if not sources:
         answer = "知识库中没有相关内容，请尝试其他问题。"
@@ -445,10 +484,15 @@ def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bo
         messages.append({"role": m["role"], "content": m["content"]})
     messages.append({"role": "user", "content": context_msg})
 
+    t_llm = time.perf_counter()
     answer = llm_client.chat(messages)
-    result = {"answer": answer, "sources": sources}
-    _chat_cache.set(cache_key, result)
-    return result
+    timings["llm_ms"] = _ms(time.perf_counter() - t_llm)
+    timings["cached"] = False
+    timings["total_ms"] = _ms(time.perf_counter() - t_start)
+
+    # 缓存只存答案与来源，耗时每次重新统计
+    _chat_cache.set(cache_key, {"answer": answer, "sources": sources})
+    return {"answer": answer, "sources": sources, "timings": timings}
 
 
 def chat(
@@ -462,8 +506,10 @@ def chat(
     - 不传 conversation_id 时新建对话（标题取 query 前 30 字）
     - 取最近 chat_history_rounds 轮历史作为多轮上下文
     - 同用户同问题+同历史 10 分钟内命中缓存，跳过检索+LLM，但仍记录消息
-    - 返回：{answer, sources, conversation_id}
+    - 返回：{answer, sources, conversation_id, timings}（timings 为各阶段耗时，毫秒）
     """
+    t_start = time.perf_counter()
+
     # 1. 已有对话：取历史
     history = []
     if conversation_id:
@@ -476,6 +522,7 @@ def chat(
     result = _chat_generate(query, user_id, history, use_rerank=use_rerank)
     answer = result["answer"]
     sources = result["sources"]
+    timings = result.get("timings", {})
 
     # 3. 新对话此时才创建
     if not conversation_id:
@@ -491,10 +538,14 @@ def chat(
     )
     ConversationRepository.touch(conversation_id)
 
+    # 5. 服务端总耗时 = 请求进入 → 检索/生成 + 落库全部完成
+    timings["total_ms"] = _ms(time.perf_counter() - t_start)
+
     return {
         "answer": answer,
         "sources": sources,
         "conversation_id": conversation_id,
+        "timings": timings,
     }
 
 
@@ -507,10 +558,16 @@ def chat_stream(
     """流式问答：逐 token yield 内容，结束后落库
 
     生成器 yield 的内容：
-      - {"type": "start", "conversation_id": str, "sources": list}
+      - {"type": "start", "conversation_id": str, "sources": list, "timings": dict}
       - {"type": "token", "content": str}  (多次)
-      - {"type": "done"}
+      - {"type": "done", "timings": dict}
+
+    timings（毫秒）：embed_query_ms / vector_search_ms / bm25_ms / pg_fetch_ms /
+    rerank_ms / retrieve_total_ms / llm_ttft_ms（模型首字延迟）/ llm_ms（生成总时长）/
+    total_ms（服务端从接收到全部完成的总耗时）；缓存命中时 cached=True。
     """
+    t_start = time.perf_counter()
+
     # 1. 已有对话：取历史
     history = []
     if conversation_id:
@@ -531,13 +588,16 @@ def chat_stream(
         # 缓存命中：把答案拆成小块"流式"吐出，保证 UX 一致
         answer = cached["answer"]
         sources = cached["sources"]
-        yield {"type": "start", "conversation_id": conversation_id, "sources": sources}
+        timings: Dict[str, Any] = {"cached": True}
+        yield {"type": "start", "conversation_id": conversation_id,
+               "sources": sources, "timings": dict(timings)}
         chunk_size = 3
         for i in range(0, len(answer), chunk_size):
             yield {"type": "token", "content": answer[i:i + chunk_size]}
     else:
         # 缓存未命中：检索 + 流式生成
-        sources = retrieve(query, user_id=user_id, use_rerank=use_rerank)
+        timings = {}
+        sources = retrieve(query, user_id=user_id, use_rerank=use_rerank, timings=timings)
         if not sources:
             answer = "知识库中没有相关内容，请尝试其他问题。"
             context_msg = query
@@ -554,13 +614,20 @@ def chat_stream(
             messages.append({"role": m["role"], "content": m["content"]})
         messages.append({"role": "user", "content": context_msg})
 
-        yield {"type": "start", "conversation_id": conversation_id, "sources": sources}
+        # start 事件带检索阶段耗时快照（dict 拷贝，避免后续生成耗时覆盖）
+        yield {"type": "start", "conversation_id": conversation_id,
+               "sources": sources, "timings": dict(timings)}
 
         answer_parts = []
+        t_llm = time.perf_counter()
         for token in llm_client.chat_stream(messages):
+            if "llm_ttft_ms" not in timings:
+                timings["llm_ttft_ms"] = _ms(time.perf_counter() - t_llm)
             answer_parts.append(token)
             yield {"type": "token", "content": token}
         answer = "".join(answer_parts)
+        timings["llm_ms"] = _ms(time.perf_counter() - t_llm)
+        timings["cached"] = False
         _chat_cache.set(cache_key, {"answer": answer, "sources": sources})
 
     # 4. 落库
@@ -573,4 +640,7 @@ def chat_stream(
     )
     ConversationRepository.touch(conversation_id)
 
-    yield {"type": "done"}
+    # 5. 总耗时 = 从接收请求到落库完成
+    timings["total_ms"] = _ms(time.perf_counter() - t_start)
+
+    yield {"type": "done", "timings": timings}

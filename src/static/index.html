@@ -391,6 +391,26 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
 .msg-sources .src-item { font-size: 11px; color: var(--text-dim); margin-bottom: 2px; }
 .msg-sources .src-item .score { color: var(--amber); }
 
+/* 链路耗时条 */
+.msg-timings {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 176, 0, 0.05);
+  border-left: 2px solid var(--amber);
+}
+.msg-timings .timing-label { color: var(--amber); font-size: 10px; letter-spacing: 1px; margin-bottom: 6px; }
+.msg-timings .timing-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.msg-timings .chip {
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+.msg-timings .chip b { color: var(--text); font-weight: normal; }
+.msg-timings .chip.total { border-color: var(--amber); }
+.msg-timings .chip.total b { color: var(--amber); }
+
 /* 思考中动画 */
 .thinking { display: inline-flex; gap: 4px; }
 .thinking span {
@@ -754,6 +774,38 @@ function onChatKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 }
 
+function fmtMs(ms) {
+  if (ms === null || ms === undefined) return '';
+  if (ms >= 1000) return (ms / 1000).toFixed(2) + ' s';
+  return (Math.round(ms * 10) / 10) + ' ms';
+}
+
+// 渲染链路耗时条：t 为服务端 timings，clientMs 为浏览器端到端耗时
+function timingHtml(t, clientMs) {
+  const chips = [];
+  const add = (label, value, cls = '') =>
+    chips.push(`<span class="chip ${cls}"><b>${label}</b> ${value}</span>`);
+
+  if (t && t.cached) {
+    add('缓存命中', '跳过检索与生成');
+  } else if (t) {
+    if (t.embed_query_ms != null) add('向量化', fmtMs(t.embed_query_ms));
+    if (t.vector_search_ms != null) add('向量召回', fmtMs(t.vector_search_ms));
+    if (t.bm25_ms != null) add('BM25', fmtMs(t.bm25_ms));
+    if (t.pg_fetch_ms != null) add('PG 回查', fmtMs(t.pg_fetch_ms));
+    if (t.rerank_ms != null) add('重排', fmtMs(t.rerank_ms));
+    if (t.retrieve_total_ms != null) add('检索合计', fmtMs(t.retrieve_total_ms));
+    if (t.llm_ttft_ms != null) add('首字延迟', fmtMs(t.llm_ttft_ms));
+    if (t.llm_ms != null) add('LLM 生成', fmtMs(t.llm_ms));
+  }
+  if (clientMs != null) add('端到端', fmtMs(clientMs), 'total');
+  if (t && t.total_ms != null) add('服务端总计', fmtMs(t.total_ms), 'total');
+  if (!chips.length) return '';
+
+  return `<div class="msg-timings"><div class="timing-label">// 链路耗时</div>` +
+    `<div class="timing-chips">${chips.join('')}</div></div>`;
+}
+
 async function sendMessage() {
   const input = document.getElementById('chat-input');
   const query = input.value.trim();
@@ -774,7 +826,9 @@ async function sendMessage() {
 
   let answerText = '';
   let sources = [];
+  let timings = {};
   let started = false;
+  const t0 = performance.now();  // 浏览器端到端起点
 
   try {
     const res = await fetch(API + '/chat/stream', {
@@ -815,6 +869,7 @@ async function sendMessage() {
         if (event.type === 'start') {
           started = true;
           sources = event.sources || [];
+          timings = event.timings || {};
           // 替换思考动画为文本容器
           const body = aiDiv.querySelector('.msg-body');
           body.innerHTML = '<pre></pre>';
@@ -830,13 +885,20 @@ async function sendMessage() {
         } else if (event.type === 'error') {
           throw new Error(event.message || '回答失败');
         } else if (event.type === 'done') {
+          const body = aiDiv.querySelector('.msg-body');
           // 追加来源
           if (sources.length) {
-            const body = aiDiv.querySelector('.msg-body');
             const srcHtml = `<div class="msg-sources"><div class="src-label">// 来源</div>` +
               sources.map(s => `<div class="src-item">[${s.filename}] ${s.section || ''} <span class="score">(${(s.score||0).toFixed(3)})</span></div>`).join('') +
               `</div>`;
             body.insertAdjacentHTML('beforeend', srcHtml);
+          }
+          // 追加链路耗时（服务端各阶段 + 浏览器端到端）
+          const clientMs = Math.round(performance.now() - t0);
+          const tgHtml = timingHtml(event.timings || timings, clientMs);
+          if (tgHtml) {
+            body.insertAdjacentHTML('beforeend', tgHtml);
+            box.scrollTop = box.scrollHeight;
           }
         }
       }
