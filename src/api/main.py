@@ -32,7 +32,7 @@ from src.api.schemas import (
     RetrieveResponse,
     UserInfo,
 )
-from src.auth import create_access_token, hash_password, verify_password
+from src.auth import TOKEN_EXPIRY_MINUTES, create_access_token, hash_password, verify_password
 from src.auth.deps import get_current_user
 from src.db import db
 from src.db.repository import (
@@ -233,7 +233,11 @@ async def register(request: RegisterRequest):
         password_hash=hash_password(request.password),
         role="user",
     )
-    token = create_access_token(subject=user_id, role="user")
+    token = create_access_token(
+        subject=user_id,
+        role="user",
+        expires_minutes=TOKEN_EXPIRY_MINUTES[request.expires_in],
+    )
     return AuthResponse(
         access_token=token,
         user_id=user_id,

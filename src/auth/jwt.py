@@ -6,6 +6,14 @@ from jose import JWTError, jwt
 
 from src.config import settings
 
+# 可选 token 有效期：24 小时 / 一周 / 一个月 / 一年
+TOKEN_EXPIRY_MINUTES = {
+    "24h": 60 * 24,
+    "7d": 60 * 24 * 7,
+    "30d": 60 * 24 * 30,
+    "1y": 60 * 24 * 365,
+}
+
 
 def create_access_token(
     subject: str,

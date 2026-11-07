@@ -1,5 +1,5 @@
 """API 响应模型"""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -92,6 +92,7 @@ class ChatRequest(BaseModel):
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=15)
     password: str = Field(..., min_length=6, max_length=128)
+    expires_in: Literal["24h", "7d", "30d", "1y"] = "24h"  # token 有效期，默认 24 小时
 
 
 class LoginRequest(BaseModel):

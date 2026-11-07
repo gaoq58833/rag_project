@@ -27,6 +27,7 @@
 - **业务库**：完整 chunk 数据入 PostgreSQL（JSONB），Qdrant 只存向量 + 最小 payload，检索后回查 PG
 - **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染（「正在搜索知识库 → 正在生成回答」动态状态提示）、引用来源与链路耗时展示
 - **用户头像**：顶栏点击上传自定义头像（jpg/jpeg/png/webp/gif，≤2MB），顶栏与聊天消息实时显示；URL 带 `?v=` 版本号，换头像后浏览器不读旧缓存
+- **注册可选 token 有效期**：注册时可选 24 小时（默认）/ 一周 / 一个月 / 一年，JWT `exp` 按选择签发；登录沿用 `JWT_EXPIRE_MINUTES`（默认 24h）
 - **REST API**：FastAPI + uvicorn，Swagger 文档自动生成
 - **容器化部署**：Docker Compose 一键启动（postgres + qdrant + rag-api）
 
@@ -475,7 +476,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 | GET    | `/formats`                     | 否   | 返回支持的扩展名列表                                                    |
 | POST   | `/parse`                       | 否   | 上传文件 → 返回 `raw_text`、`tables`、`metadata`（不分块）              |
 | POST   | `/chunk`                       | 否   | 上传文件 → 解析并分块，返回 `chunks` 列表                               |
-| POST   | `/auth/register`               | 否   | 用户注册，返回 JWT token                                                |
+| POST   | `/auth/register`               | 否   | 用户注册，返回 JWT token（`expires_in` 可选 24h/7d/30d/1y，默认 24h）   |
 | POST   | `/auth/login`                  | 否   | 用户名密码登录，返回 JWT token                                          |
 | GET    | `/auth/me`                     | 是   | 获取当前登录用户信息（含 `avatar_url`）                                 |
 | POST   | `/users/me/avatar`             | 是   | 上传当前用户头像（jpg/jpeg/png/webp/gif，≤2MB），覆盖旧头像             |
@@ -491,6 +492,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 | DELETE | `/conversations/{id}`          | 是   | 删除对话及其全部消息                                                    |
 
 > 鉴权接口需在请求头携带 `Authorization: Bearer <token>`。
+> `/auth/register` 请求体：`{"username": "...", "password": "...", "expires_in": "24h"}`，`expires_in` 取值 `24h`（默认）/`7d`/`30d`/`1y`；登录固定使用 `JWT_EXPIRE_MINUTES`（默认 24 小时）。
 > `/chat` 多轮对话：首次调用不传 `conversation_id` 会新建对话并返回 ID；后续调用传入该 ID 即可带入最近 5 轮上下文（`CHAT_HISTORY_ROUNDS` 可调）。
 > LLM 生成参数：`temperature=0.2`、`max_tokens=2048`。
 > 已启用 CORS 跨域（`allow_origins="*"`），前端可直接调用；生产环境建议改为具体域名。
@@ -509,7 +511,7 @@ import requests
 BASE = "http://localhost:8000"
 
 # 注册
-r = requests.post(f"{BASE}/auth/register", json={"username": "alice", "password": "secret123"})
+r = requests.post(f"{BASE}/auth/register", json={"username": "alice", "password": "secret123", "expires_in": "24h"})
 token = r.json()["access_token"]
 headers = {"Authorization": f"Bearer {token}"}
 
@@ -873,6 +875,8 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `JWT_SECRET`         | `change-me-in-production` | JWT 签名密钥（生产必须修改） |
 | `JWT_ALGORITHM`      | `HS256`                   | 签名算法                     |
 | `JWT_EXPIRE_MINUTES` | `1440`                    | Token 过期时间（分钟，24h）  |
+
+> 注册接口可通过 `expires_in` 覆盖默认有效期（`24h` / `7d` / `30d` / `1y`），仅对本次注册签发的 token 生效。
 
 ### 其他
 

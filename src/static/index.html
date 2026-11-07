@@ -93,7 +93,7 @@ button.danger:hover:not(:disabled) {
   box-shadow: 0 0 8px rgba(255, 59, 59, 0.3);
 }
 
-input, textarea {
+input, textarea, select {
   font-family: var(--font);
   font-size: 14px;
   background: var(--bg-2);
@@ -103,7 +103,7 @@ input, textarea {
   outline: none;
   transition: border 0.15s;
 }
-input:focus, textarea:focus {
+input:focus, textarea:focus, select:focus {
   border-color: var(--green);
   box-shadow: 0 0 6px rgba(0, 255, 65, 0.2) inset;
 }
@@ -155,7 +155,7 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
   margin-bottom: 4px;
   letter-spacing: 1px;
 }
-.form-group input { width: 100%; }
+.form-group input, .form-group select { width: 100%; }
 .login-actions { display: flex; gap: 10px; margin-top: 20px; }
 .login-actions button { flex: 1; }
 .toggle-auth {
@@ -495,6 +495,15 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
       <label>[ PASSWORD ]</label>
       <input type="password" id="password" placeholder="输入密码" autocomplete="off">
     </div>
+    <div class="form-group">
+      <label>[ TOKEN 有效期 ] <span style="color:var(--text-dim)">仅注册时选择</span></label>
+      <select id="token-expiry">
+        <option value="24h">24 小时（默认）</option>
+        <option value="7d">一周</option>
+        <option value="30d">一个月</option>
+        <option value="1y">一年</option>
+      </select>
+    </div>
     <div class="login-actions">
       <button onclick="doLogin()">登录 >></button>
       <button onclick="doRegister()">注册 ></button>
@@ -644,8 +653,9 @@ async function doRegister() {
   const password = document.getElementById('password').value;
   if (!username || !password) return setAlert('请输入用户名和密码');
   if (password.length < 6) return setAlert('密码至少 6 位');
+  const expires_in = document.getElementById('token-expiry').value;
   try {
-    const data = await api('POST', '/auth/register', { username, password });
+    const data = await api('POST', '/auth/register', { username, password, expires_in });
     setToken(data.access_token);
     localStorage.setItem('rag_username', data.username);
     setAvatar(data.avatar_url);
