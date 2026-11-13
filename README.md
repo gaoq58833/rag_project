@@ -23,6 +23,7 @@
 - **流式输出**：`/chat/stream` SSE 接口，逐 token 渲染回答，缓存命中时模拟流式保持体验一致
 - **问答缓存**：同用户同问题+同历史 10 分钟内直接返回（TTL=600s，maxsize=500，LRU 淘汰），跳过检索+LLM，响应从 4s 降到 50ms
 - **内容去重**：入库时计算文件 SHA-256，相同内容只向量化一次，多用户共享向量，删除时按引用计数安全清理
+- **文档热更新**：`PUT /documents/{id}` 上传新文件即可替换旧内容，文档 ID 不变；旧 chunks/向量按引用计数清理后后台重新入库，问答缓存自动失效，无需重启服务
 - **用户隔离**：文档/对话按 user_id 归属，只能查看和删除自己的资源
 - **业务库**：完整 chunk 数据入 PostgreSQL（JSONB），Qdrant 只存向量 + 最小 payload，检索后回查 PG
 - **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染（「正在搜索知识库 → 正在生成回答」动态状态提示）、引用来源与链路耗时展示
@@ -483,6 +484,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 | POST   | `/ingest`                      | 是   | 上传文档 → 解析分块 → 向量化 → 写入 PostgreSQL + Qdrant（自动内容去重） |
 | GET    | `/documents`                   | 是   | 获取当前用户的文档列表（用户隔离）                                      |
 | DELETE | `/documents/{id}`              | 是   | 删除文档及其向量（共享向量按引用计数安全清理）                          |
+| PUT    | `/documents/{id}`              | 是   | 热更新文档内容：multipart 上传新文件，ID 不变，后台重新入库             |
 | POST   | `/retrieve`                    | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）                        |
 | POST   | `/search/image`                | 是   | 上传图片 → 多模态向量检索相似图片（以图搜图，返回描述 + 原图路径）      |
 | POST   | `/chat`                        | 是   | `query` → 检索 → LLM 生成回答 + 引用来源，支持多轮对话                  |
@@ -501,6 +503,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 `/retrieve` 支持 `?query=xxx&top_k=10&use_rerank=true`。
 `/search/image` 用 multipart 上传图片，支持 `?top_k=10`，返回相似图片的 VLM 描述、`images` 原图路径与余弦相似度 `score`。
 `/users/me/avatar` 用 multipart 上传头像；登录与 `/auth/me` 响应的 `avatar_url` 带 `?v=<文件修改时间>` 版本号，头像文件存于 `data/avatars/` 并通过 `/avatars/` 静态路径访问。
+`PUT /documents/{id}` 用 multipart 上传新文件热更新文档：新文件 SHA-256 与旧内容相同则直接返回「内容未变化」；否则删除旧 chunks/向量（共享向量按引用计数保留），文档 ID 不变，状态置为 `processing` 后后台重新解析入库，前端轮询 `/documents` 即可看到进度。
 `/chat` 请求体：`{"query": "...", "use_rerank": true, "conversation_id": "可选"}`。
 
 ### 调用示例

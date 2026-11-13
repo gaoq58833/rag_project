@@ -6,6 +6,7 @@
   python -m src.api.main
 """
 from contextlib import asynccontextmanager
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -397,6 +398,52 @@ async def delete_document(
     db.execute("DELETE FROM documents WHERE id = %s", (document_id,))
     clear_chat_cache()  # 文档变化，清空问答缓存
     return {"ok": True, "deleted_chunks": len(chunks)}
+
+
+@app.put("/documents/{document_id}", summary="热更新：替换已上传文档的内容")
+async def update_document(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """替换文档内容：删除旧 chunks/向量（引用计数安全清理），文档 ID 不变，
+    后台重新解析入库。内容未变化时直接返回，零开销。需登录。"""
+    doc = DocumentRepository.get_by_id(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    if str(doc.get("user_id") or "") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="无权更新他人文档")
+    if doc.get("status") == "processing":
+        raise HTTPException(status_code=409, detail="文档正在处理中，请等待完成后再更新")
+
+    filename = file.filename or doc["filename"]
+    file_bytes = await file.read()
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    if content_hash == doc.get("content_hash"):
+        return {
+            "document_id": document_id,
+            "status": doc.get("status", "completed"),
+            "updated": False,
+            "detail": "内容未变化，无需更新",
+        }
+
+    # 删除旧 chunks：向量按引用计数清理（其他文档仍引用则保留），PG 行直接删
+    chunks = ChunkRepository.get_by_document_id(document_id)
+    point_ids = [str(c["qdrant_point_id"]) for c in chunks if c.get("qdrant_point_id")]
+    if point_ids:
+        ref_count = ChunkRepository.count_by_qdrant_ids_excluding_doc(point_ids, document_id)
+        if ref_count == 0:
+            vector_store.delete_by_ids(point_ids)
+            image_vector_store.delete_by_ids(point_ids)
+    ChunkRepository.delete_by_document_id(document_id)
+
+    # 文档行重置为 processing（ID 不变），后台复用异步入库流程
+    file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    DocumentRepository.reset_for_update(document_id, filename, file_ext, content_hash)
+    clear_chat_cache()  # 旧内容已删除，立即失效相关问答缓存
+    background_tasks.add_task(process_ingest, document_id, file_bytes, filename, current_user["id"])
+    return {"document_id": document_id, "status": "processing", "updated": True}
 
 
 @app.post(

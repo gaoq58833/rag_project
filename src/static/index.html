@@ -538,6 +538,7 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
         <p>拖拽文件到此处，或 <strong style="cursor:pointer;text-decoration:underline" onclick="document.getElementById('file-input').click()">点击选择</strong></p>
         <p class="hint" style="margin-top:6px">支持 PDF / Word / Markdown / HTML / TXT</p>
         <input type="file" id="file-input" style="display:none" onchange="handleFile(this.files[0])">
+        <input type="file" id="update-input" style="display:none" onchange="handleUpdateFile(this)">
       </div>
 
       <div class="section-title">已入库文档</div>
@@ -735,7 +736,7 @@ async function loadDocuments() {
         <td>${d.chunk_count || 0} 块</td>
         <td${failTip}>${statusHtml}</td>
         <td class="hint">${time}</td>
-        <td><button class="danger" onclick="deleteDoc('${d.id}')">删除</button></td>
+        <td><button onclick="updateDoc('${d.id}')">更新</button><button class="danger" onclick="deleteDoc('${d.id}')">删除</button></td>
       `;
       tbody.appendChild(tr);
     });
@@ -789,6 +790,27 @@ async function deleteDoc(id) {
     await api('DELETE', '/documents/' + id);
     await loadDocuments();
   } catch (e) { alert('删除失败: ' + e.message); }
+}
+
+// 热更新：替换文档内容，ID 不变，后台重新入库
+let updatingDocId = null;
+function updateDoc(id) {
+  updatingDocId = id;
+  const input = document.getElementById('update-input');
+  input.value = '';  // 允许重复选择同一文件
+  input.click();
+}
+async function handleUpdateFile(input) {
+  const file = input.files[0];
+  if (!file || !updatingDocId) return;
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const r = await api('PUT', '/documents/' + updatingDocId, form, true);
+    if (r.updated === false) alert('文件内容未变化，无需更新');
+    await loadDocuments();  // 立即刷新出 processing 状态，轮询自动接管
+  } catch (e) { alert('更新失败: ' + e.message); }
+  updatingDocId = null;
 }
 
 // ============ 聊天 ============

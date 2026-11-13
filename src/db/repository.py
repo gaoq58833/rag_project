@@ -53,6 +53,20 @@ class DocumentRepository:
         )
 
     @staticmethod
+    def reset_for_update(document_id: str, filename: str, file_ext: str, content_hash: str) -> int:
+        """热更新：文档行重置为 processing（ID 不变），等待后台重新入库"""
+        return db.execute(
+            """
+            UPDATE documents
+            SET filename = %s, file_ext = %s, content_hash = %s, status = 'processing',
+                total_pages = 0, table_count = 0, chunk_count = 0, raw_text = NULL,
+                error_msg = NULL, uploaded_at = now()
+            WHERE id = %s
+            """,
+            (filename, file_ext, content_hash, document_id),
+        )
+
+    @staticmethod
     def get_by_filename(filename: str) -> Optional[Dict[str, Any]]:
         return db.query_one(
             "SELECT * FROM documents WHERE filename = %s ORDER BY uploaded_at DESC LIMIT 1",
