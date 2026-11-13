@@ -729,12 +729,14 @@ async function loadDocuments() {
       if (d.status === 'processing') hasProcessing = true;
       const time = d.uploaded_at ? new Date(d.uploaded_at).toLocaleString('zh-CN') : '-';
       const statusHtml = statusMap[d.status] || statusMap.completed;
-      const failTip = d.status === 'failed' && d.error_msg ? ` title="${String(d.error_msg).replace(/"/g, '&quot;')}"` : '';
+      const failDetail = d.status === 'failed' && d.error_msg
+        ? `<div style="margin-top:4px;max-width:220px;font-size:11px;line-height:1.5;color:var(--red);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(String(d.error_msg))}">${escapeHtml(String(d.error_msg))}</div>`
+        : '';
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td class="doc-name">${d.filename}<span class="doc-ext">${d.file_ext || ''}</span></td>
         <td>${d.chunk_count || 0} 块</td>
-        <td${failTip}>${statusHtml}</td>
+        <td>${statusHtml}${failDetail}</td>
         <td class="hint">${time}</td>
         <td><button onclick="updateDoc('${d.id}')">更新</button><button class="danger" onclick="deleteDoc('${d.id}')">删除</button></td>
       `;

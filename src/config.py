@@ -40,6 +40,13 @@ class Settings:
     reranker_base_url: str = os.getenv("RERANKER_BASE_URL") or os.getenv("LLM_BASE_URL", "")
     reranker_model: str = os.getenv("RERANKER_MODEL", "qwen3-rerank")
 
+    # 模型降级：主模型调用失败时自动切换备用模型重试一次（均为阿里百炼）
+    # 注意：embedding 备用模型必须保持 1024 维；不同模型向量空间不同，降级仅作应急
+    llm_fallback_model: str = os.getenv("LLM_FALLBACK_MODEL", "qwen-plus")
+    embedding_fallback_model: str = os.getenv("EMBEDDING_FALLBACK_MODEL", "text-embedding-v4")
+    vision_fallback_model: str = os.getenv("VISION_FALLBACK_MODEL", "qwen-vl-max")
+    reranker_fallback_model: str = os.getenv("RERANKER_FALLBACK_MODEL", "gte-rerank-v2")
+
     # Qdrant
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
     qdrant_path: str = os.getenv("QDRANT_PATH", "")  # 设了则用本地嵌入式模式，无需启服务

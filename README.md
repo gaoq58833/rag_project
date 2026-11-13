@@ -29,6 +29,8 @@
 - **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染（「正在搜索知识库 → 正在生成回答」动态状态提示）、引用来源与链路耗时展示
 - **用户头像**：顶栏点击上传自定义头像（jpg/jpeg/png/webp/gif，≤2MB），顶栏与聊天消息实时显示；URL 带 `?v=` 版本号，换头像后浏览器不读旧缓存
 - **注册可选 token 有效期**：注册时可选 24 小时（默认）/ 一周 / 一个月 / 一年，JWT `exp` 按选择签发；登录沿用 `JWT_EXPIRE_MINUTES`（默认 24h）
+- **模型降级**：问答 / 向量 / 图片理解 / 重排主模型调用失败时，自动切换百炼备用模型重试一次（`LLM_FALLBACK_MODEL` 等可配）；流式回答中途断连时，已输出的半截答案作为 assistant 消息 + 续写指令交给备用模型**从断点接续生成**，前端无感知不重复；只降级一次，备用再失败则抛错
+- **入库失败友好提示**：解析/向量化失败即标记 `failed`（无自动重试），后端把技术异常翻译成用户可懂的提示（如「您的文档格式不符合要求，请重新上传」「模型服务连接失败，请稍后点击『更新』重试」），前端失败行直接展示原因，原始异常保留在后台日志
 - **REST API**：FastAPI + uvicorn，Swagger 文档自动生成
 - **容器化部署**：Docker Compose 一键启动（postgres + qdrant + rag-api）
 
@@ -813,6 +815,10 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `MM_EMBEDDING_BASE_URL` | `https://dashscope.aliyuncs.com` | 多模态向量服务端点                                                          |
 | `MM_EMBEDDING_DIM`   | `1024`                   | 多模态向量维度，换模型时同步修改并重建 `rag_images` 集合                                |
 | `RERANKER_MODEL`     | `qwen3-rerank`           | 重排模型                                                                                |
+| `LLM_FALLBACK_MODEL` | `qwen-plus`              | 问答降级模型：主模型调用失败时自动切换重试一次                                          |
+| `EMBEDDING_FALLBACK_MODEL` | `text-embedding-v4` | 向量降级模型（须保持 1024 维；与主模型向量空间不同，仅作应急）                     |
+| `VISION_FALLBACK_MODEL` | `qwen-vl-max`         | 图片理解降级模型                                                                        |
+| `RERANKER_FALLBACK_MODEL` | `gte-rerank-v2`      | 重排降级模型                                                                            |
 
 ### 向量数据库（Qdrant）
 

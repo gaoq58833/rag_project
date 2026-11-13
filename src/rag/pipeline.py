@@ -165,6 +165,31 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
     }
 
 
+def _friendly_ingest_error(exc: Exception) -> str:
+    """把技术异常翻译为用户能看懂的提示（原始异常仍会打印在后台日志中）"""
+    msg = str(exc)
+    low = msg.lower()
+    # 服务连接/超时类：稍后重试可能成功
+    if isinstance(exc, (TimeoutError, ConnectionError)) or any(
+        k in low for k in ("timeout", "timed out", "connection", "connect")
+    ) or "连接" in msg:
+        return "模型服务连接失败，请稍后点击「更新」重试"
+    # 文件格式不支持
+    if "不支持的文件格式" in msg or "不支持的图片格式" in msg:
+        return "您的文档格式不符合要求，请重新上传"
+    # 文件过大
+    if "过大" in msg:
+        return "文件过大，请压缩后重新上传"
+    # 内容为空
+    if "全部为空" in msg or "empty" in low:
+        return "文档内容为空，请重新上传"
+    # 解析失败（文件损坏、编码异常、JSON 语法错误等）
+    if "解析失败" in msg or "编码识别失败" in msg or "无法识别图片" in msg or "嵌套层级过深" in msg:
+        return "文档无法解析（可能已损坏或编码异常），请重新上传"
+    # 兜底
+    return "文档处理失败，请点击「更新」重新上传"
+
+
 def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: Optional[str] = None) -> None:
     """异步入库（后台执行）：解析 → 分块 → 向量化/倒排索引 → 写 PG + Qdrant → 更新状态
 
@@ -254,7 +279,7 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
         logger.info(f"Document {document_id} ({filename}) ingested: {len(chunks)} chunks, index={parser.INDEX_TYPE}")
     except Exception as e:
         logger.error(f"Ingest failed for document {document_id} ({filename}): {e}")
-        DocumentRepository.mark_failed(document_id, str(e))
+        DocumentRepository.mark_failed(document_id, _friendly_ingest_error(e))
 
 
 def _sec(dt: float) -> float:
