@@ -34,3 +34,6 @@ package*.json
 # 测试用临时文件（table_test.docx、FGSM_test.docx 等）
 *.docx
 
+# 课程实验报告（非项目产物，不提交）
+实验4数据库设计-*.doc
+
