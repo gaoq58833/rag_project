@@ -20,17 +20,28 @@ class DocumentRepository:
         content_hash: Optional[str] = None,
         user_id: Optional[str] = None,
         status: str = "processing",
+        file_size: Optional[int] = None,
+        wiki_eligible: bool = False,
     ) -> str:
-        """插入文档记录，返回 document_id (UUID 字符串)"""
+        """插入文档记录，返回 document_id (UUID 字符串)。
+        file_size：原始文件字节数（判断小文档）；wiki_eligible：是否参与 LLM Wiki 生成。"""
         doc_id = str(uuid.uuid4())
         db.execute(
             """
-            INSERT INTO documents (id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO documents (id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, status, file_size, wiki_eligible)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (doc_id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, status),
+            (doc_id, user_id, filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, status, file_size, wiki_eligible),
         )
         return doc_id
+
+    @staticmethod
+    def set_wiki_eligible(document_id: str, user_id: str, eligible: bool) -> int:
+        """用户手动切换某文档是否参与 Wiki 生成（用户隔离校验）。返回受影响行数。"""
+        return db.execute(
+            "UPDATE documents SET wiki_eligible = %s WHERE id = %s AND user_id = %s",
+            (eligible, document_id, user_id),
+        )
 
     @staticmethod
     def mark_completed(document_id: str, total_pages: int, table_count: int, chunk_count: int, raw_text: Optional[str]) -> int:
@@ -53,17 +64,19 @@ class DocumentRepository:
         )
 
     @staticmethod
-    def reset_for_update(document_id: str, filename: str, file_ext: str, content_hash: str) -> int:
-        """热更新：文档行重置为 processing（ID 不变），等待后台重新入库"""
+    def reset_for_update(document_id: str, filename: str, file_ext: str, content_hash: str, file_size: Optional[int] = None) -> int:
+        """热更新：文档行重置为 processing（ID 不变），等待后台重新入库。
+        file_size 同步刷新；wiki_eligible 保持用户手动选择，不在此覆盖。"""
         return db.execute(
             """
             UPDATE documents
             SET filename = %s, file_ext = %s, content_hash = %s, status = 'processing',
                 total_pages = 0, table_count = 0, chunk_count = 0, raw_text = NULL,
-                error_msg = NULL, uploaded_at = now()
+                error_msg = NULL, uploaded_at = now(),
+                file_size = COALESCE(%s, file_size)
             WHERE id = %s
             """,
-            (filename, file_ext, content_hash, document_id),
+            (filename, file_ext, content_hash, file_size, document_id),
         )
 
     @staticmethod
@@ -161,6 +174,32 @@ class ChunkRepository:
             "SELECT * FROM chunks WHERE document_id = %s ORDER BY chunk_index",
             (document_id,),
         )
+
+    @staticmethod
+    def get_wiki_eligible_chunks(user_id: str) -> List[Dict[str, Any]]:
+        """取该用户 wiki_eligible=true 文档的全部 chunk（含 filename/content/section），供 Wiki 聚类生成。"""
+        return db.query_all(
+            """
+            SELECT c.qdrant_point_id, c.content, c.section, c.document_id, d.filename
+            FROM chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE d.user_id = %s AND d.wiki_eligible = true
+            """,
+            (user_id,),
+        )
+
+    @staticmethod
+    def get_sources_by_chunk_ids(user_id: str, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+        """Wiki 溯源：按 chunk id 回查内容 + 所属文件名（用户隔离），供前端展示来源。"""
+        if not chunk_ids:
+            return []
+        sql = """
+            SELECT c.qdrant_point_id, c.content, c.section, c.chunk_index, d.filename
+            FROM chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE d.user_id = %s AND c.qdrant_point_id = ANY(%s::uuid[])
+        """
+        return db.query_all(sql, (user_id, chunk_ids))
 
     @staticmethod
     def delete_by_document_id(document_id: str) -> int:
@@ -288,4 +327,168 @@ class MessageRepository:
         return db.query_all(
             "SELECT * FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
             (conversation_id,),
+        )
+
+
+class WikiPageRepository:
+    """Wiki 页面表操作（LLM 自动生成的知识页面）"""
+
+    @staticmethod
+    def upsert(
+        user_id: str,
+        slug: str,
+        title: str,
+        summary: Optional[str],
+        content_md: str,
+        paragraphs: List[Dict[str, Any]],
+        outgoing_links: List[str],
+        source_chunk_ids: List[str],
+        tokens: str,
+        status: str = "ready",
+    ) -> str:
+        """插入或更新页面（按 user_id+slug 去重），返回 page_id。
+        tokens 为 jieba 分词后的空格分隔词串，用于建立 tsv 全文索引。"""
+        page_id = str(uuid.uuid4())
+        sql = """
+            INSERT INTO wiki_pages
+                (id, user_id, slug, title, summary, content_md, paragraphs,
+                 outgoing_links, source_chunk_ids, status, tsv)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s,
+                    to_tsvector('simple', %s))
+            ON CONFLICT (user_id, slug) DO UPDATE SET
+                title = EXCLUDED.title,
+                summary = EXCLUDED.summary,
+                content_md = EXCLUDED.content_md,
+                paragraphs = EXCLUDED.paragraphs,
+                outgoing_links = EXCLUDED.outgoing_links,
+                source_chunk_ids = EXCLUDED.source_chunk_ids,
+                status = EXCLUDED.status,
+                error_msg = NULL,
+                tsv = EXCLUDED.tsv,
+                updated_at = now()
+            RETURNING id
+        """
+        row = db.query_one(
+            sql,
+            (
+                page_id, user_id, slug, title, summary, content_md,
+                json.dumps(paragraphs or [], ensure_ascii=False),
+                json.dumps(outgoing_links or [], ensure_ascii=False),
+                json.dumps(source_chunk_ids or [], ensure_ascii=False),
+                status, tokens,
+            ),
+        )
+        return str(row["id"])
+
+    @staticmethod
+    def get_by_slug(user_id: str, slug: str) -> Optional[Dict[str, Any]]:
+        return db.query_one(
+            "SELECT * FROM wiki_pages WHERE user_id = %s AND slug = %s",
+            (user_id, slug),
+        )
+
+    @staticmethod
+    def list_by_user(user_id: str) -> List[Dict[str, Any]]:
+        """页面列表（不含大字段 paragraphs/content_md），供侧边目录用"""
+        return db.query_all(
+            """SELECT slug, title, summary, status, updated_at
+               FROM wiki_pages WHERE user_id = %s ORDER BY updated_at DESC""",
+            (user_id,),
+        )
+
+    @staticmethod
+    def get_all_by_user(user_id: str) -> List[Dict[str, Any]]:
+        """取该用户全部页面完整字段（构建关系图用）"""
+        return db.query_all(
+            "SELECT * FROM wiki_pages WHERE user_id = %s ORDER BY updated_at DESC",
+            (user_id,),
+        )
+
+    @staticmethod
+    def delete_by_user(user_id: str) -> int:
+        """全量重建前清空该用户旧页面"""
+        return db.execute("DELETE FROM wiki_pages WHERE user_id = %s", (user_id,))
+
+    @staticmethod
+    def delete_by_slug(user_id: str, slug: str) -> int:
+        return db.execute(
+            "DELETE FROM wiki_pages WHERE user_id = %s AND slug = %s",
+            (user_id, slug),
+        )
+
+    @staticmethod
+    def mark_failed(user_id: str, slug: str, error_msg: str) -> int:
+        return db.execute(
+            "UPDATE wiki_pages SET status = 'failed', error_msg = %s, updated_at = now() WHERE user_id = %s AND slug = %s",
+            (error_msg[:500], user_id, slug),
+        )
+
+    @staticmethod
+    def mark_stale_by_chunk_ids(user_id: str, chunk_ids: List[str]) -> int:
+        """文档删除时，把引用了这些 chunk 的页面标记为 stale（不删除，提示重新生成）"""
+        if not chunk_ids:
+            return 0
+        return db.execute(
+            """UPDATE wiki_pages SET status = 'stale', updated_at = now()
+               WHERE user_id = %s AND source_chunk_ids ?| %s::text[]""",
+            (user_id, chunk_ids),
+        )
+
+
+class WikiJobRepository:
+    """Wiki 生成任务表操作（异步进度跟踪）"""
+
+    @staticmethod
+    def create(user_id: str, page_total: int = 0) -> str:
+        job_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO wiki_jobs (id, user_id, status, page_total, page_done) VALUES (%s, %s, 'generating', %s, 0)",
+            (job_id, user_id, page_total),
+        )
+        return job_id
+
+    @staticmethod
+    def get_latest(user_id: str) -> Optional[Dict[str, Any]]:
+        return db.query_one(
+            "SELECT * FROM wiki_jobs WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+
+    @staticmethod
+    def get_active(user_id: str) -> Optional[Dict[str, Any]]:
+        """取该用户正在进行的生成任务（用于去重，避免重复消耗 token）"""
+        return db.query_one(
+            "SELECT * FROM wiki_jobs WHERE user_id = %s AND status = 'generating' ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+
+    @staticmethod
+    def update_progress(job_id: str, page_done: int, page_total: Optional[int] = None) -> int:
+        if page_total is not None:
+            return db.execute(
+                "UPDATE wiki_jobs SET page_done = %s, page_total = %s, updated_at = now() WHERE id = %s",
+                (page_done, page_total, job_id),
+            )
+        return db.execute(
+            "UPDATE wiki_jobs SET page_done = %s, updated_at = now() WHERE id = %s",
+            (page_done, job_id),
+        )
+
+    @staticmethod
+    def mark_done(job_id: str, page_total: Optional[int] = None) -> int:
+        if page_total is not None:
+            return db.execute(
+                "UPDATE wiki_jobs SET status = 'done', page_total = %s, updated_at = now() WHERE id = %s",
+                (page_total, job_id),
+            )
+        return db.execute(
+            "UPDATE wiki_jobs SET status = 'done', updated_at = now() WHERE id = %s",
+            (job_id,),
+        )
+
+    @staticmethod
+    def mark_failed(job_id: str, error_msg: str) -> int:
+        return db.execute(
+            "UPDATE wiki_jobs SET status = 'failed', error_msg = %s, updated_at = now() WHERE id = %s",
+            (error_msg[:500], job_id),
         )

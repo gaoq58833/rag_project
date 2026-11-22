@@ -88,6 +88,25 @@ class VectorStore:
             for r in results.points
         ]
 
+    def fetch_vectors(self, point_ids: List[str]) -> dict:
+        """按 point id 批量取回向量（用于 Wiki 聚类）。返回 {point_id_str: vector}。"""
+        if not point_ids:
+            return {}
+        self._ensure_collection()
+        points = self._get_client().retrieve(
+            collection_name=self.collection,
+            ids=point_ids,
+            with_vectors=True,
+            with_payload=False,
+        )
+        result = {}
+        for p in points:
+            vec = getattr(p, "vector", None)
+            if vec is None:
+                continue
+            result[str(p.id)] = list(vec)
+        return result
+
     def delete_by_filename(self, filename: str):
         """按文件名删除（覆盖上传时先删旧的）"""
         self._ensure_collection()
@@ -115,6 +134,23 @@ class VectorStore:
             points_selector=models.PointIdsList(points=point_ids),
         )
 
+    def delete_by_user(self, user_id: str):
+        """按 user_id 删除该用户全部向量（Wiki 全量重建前清空旧页面向量）"""
+        self._ensure_collection()
+        self._get_client().delete(
+            collection_name=self.collection,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="user_id",
+                            match=models.MatchValue(value=user_id),
+                        )
+                    ]
+                )
+            ),
+        )
+
     def count(self) -> int:
         """返回集合中的向量数"""
         self._ensure_collection()
@@ -127,4 +163,9 @@ vector_store = VectorStore()
 image_vector_store = VectorStore(
     collection=settings.qdrant_image_collection,
     vector_size=settings.mm_embedding_dim,
+)
+# LLM Wiki 页面向量集合（与文本 chunk 集合隔离，供问答/检索召回 Wiki 页面）
+wiki_vector_store = VectorStore(
+    collection=settings.qdrant_wiki_collection,
+    vector_size=settings.embedding_dim,
 )

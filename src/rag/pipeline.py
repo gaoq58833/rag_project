@@ -40,6 +40,12 @@ SYSTEM_PROMPT = """你是一个基于知识库的问答助手，负责根据检�
 2. 若上下文不足以回答问题，明确回复："根据现有知识库无法回答该问题。"
 3. 回答语言与用户提问语言保持一致。
 
+## 知识库结构化页面（Wiki，若提供）
+- 有时会额外提供由知识库综合生成的结构化知识页，格式为 [W编号] 《页面标题》 摘要 / 内容。
+- 若提供了 Wiki 页面，优先综合其内容作答；引用时用 [[页面标题]] 标注（如 [[循环神经网络]]）。
+- 文档片段仍可补充细节，用 [1]、[2] 标注。
+- Wiki 页面与文档片段同属"给定资料"，一律不得引入资料之外的信息。
+
 ## 上下文使用
 - 下方会提供带编号的文档片段，格式为 [编号] [章节] 内容。
 - 回答时引用对应片段，用 [1]、[2] 标注来源。
@@ -94,6 +100,9 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
 
     existing = DocumentRepository.get_by_content_hash(content_hash, user_id=user_id)
     file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    file_size = len(file_bytes)
+    # 小文档默认参与 Wiki 生成，大文档默认关闭（用户可在前端手动切换）
+    wiki_eligible = file_size <= settings.wiki_small_doc_max_bytes
 
     if existing is not None:
         # 仅同一用户的相同内容才复用（跨用户不复用，保证 Qdrant user_id 过滤隔离）
@@ -118,6 +127,8 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
                 content_hash=content_hash,
                 user_id=user_id,
                 status="completed",
+                file_size=file_size,
+                wiki_eligible=wiki_eligible,
             )
 
             reused_chunks = []
@@ -156,6 +167,8 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
         content_hash=content_hash,
         user_id=user_id,
         status="processing",
+        file_size=file_size,
+        wiki_eligible=wiki_eligible,
     )
     return {
         "document_id": document_id,
@@ -276,6 +289,12 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
             raw_text=result.raw_text,
         )
         clear_chat_cache()  # 新文档可检索，清空问答缓存
+        # 若开启自动重生成（WIKI_AUTO_REGEN=true），防抖触发 Wiki 重建；默认关闭，失败不影响入库
+        try:
+            from src.wiki.service import schedule_wiki_regen
+            schedule_wiki_regen(user_id)
+        except Exception as _e:
+            logger.warning(f"触发 Wiki 自动重生成失败（不影响入库）: {_e}")
         logger.info(f"Document {document_id} ({filename}) ingested: {len(chunks)} chunks, index={parser.INDEX_TYPE}")
     except Exception as e:
         logger.error(f"Ingest failed for document {document_id} ({filename}): {e}")
@@ -472,13 +491,29 @@ def _chat_cache_key(query: str, user_id: str, history: List[dict], use_rerank: b
     return hashlib.sha256(f"{user_id}|{query}|{use_rerank}|{history_sig}".encode()).hexdigest()
 
 
+def _build_chat_messages(
+    query: str,
+    user_id: str,
+    history: List[dict],
+    use_rerank: bool,
+    timings: Dict[str, Any],
+):
+    """检索（传统 chunk + 可选 Wiki 页面）并组装发给 LLM 的 messages。
+
+    实际逻辑委托给 src.wiki.chat_integration.build_chat_context（torch-free，可独立单测），
+    本函数仅注入 pipeline.retrieve 与 SYSTEM_PROMPT。
+    """
+    from src.wiki.chat_integration import build_chat_context
+    return build_chat_context(query, user_id, history, use_rerank, timings, retrieve, SYSTEM_PROMPT)
+
+
 def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bool = True) -> Dict[str, Any]:
     """检索 + LLM 生成（带缓存），不做落库
 
     返回值额外带 timings（各阶段耗时，秒，3 位小数）：
       - cached=True 时只有 total_s（缓存查询本身的开销）
       - 未命中时含 embed_query_s / vector_search_s / bm25_s / pg_fetch_s /
-        rerank_s / retrieve_total_s / llm_s / total_s
+        rerank_s / retrieve_total_s / wiki_s / llm_s / total_s
     """
     t_start = time.perf_counter()
     cache_key = _chat_cache_key(query, user_id, history, use_rerank)
@@ -487,37 +522,29 @@ def _chat_generate(query: str, user_id: str, history: List[dict], use_rerank: bo
         return {
             "answer": cached["answer"],
             "sources": cached["sources"],
+            "wiki": cached.get("wiki", {"used": False, "count": 0, "error": None}),
             "timings": {"cached": True, "total_s": _sec(time.perf_counter() - t_start)},
         }
 
     timings: Dict[str, Any] = {}
-    sources = retrieve(query, user_id=user_id, use_rerank=use_rerank, timings=timings)
+    messages, sources, wiki_info = _build_chat_messages(
+        query, user_id, history, use_rerank, timings
+    )
 
     if not sources:
+        # 无任何资料（chunk 与 Wiki 均空）：不调 LLM，直接兜底回答
         answer = "知识库中没有相关内容，请尝试其他问题。"
-        context_msg = query
     else:
-        context_parts = []
-        for i, s in enumerate(sources, 1):
-            section = f"[{s['section']}] " if s.get("section") else ""
-            context_parts.append(f"[{i}] {section}{s['content']}")
-        context = "\n\n".join(context_parts)
-        context_msg = f"上下文：\n{context}\n\n用户问题：{query}"
+        t_llm = time.perf_counter()
+        answer = llm_client.chat(messages)
+        timings["llm_s"] = _sec(time.perf_counter() - t_llm)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for m in history:
-        messages.append({"role": m["role"], "content": m["content"]})
-    messages.append({"role": "user", "content": context_msg})
-
-    t_llm = time.perf_counter()
-    answer = llm_client.chat(messages)
-    timings["llm_s"] = _sec(time.perf_counter() - t_llm)
     timings["cached"] = False
     timings["total_s"] = _sec(time.perf_counter() - t_start)
 
-    # 缓存只存答案与来源，耗时每次重新统计
-    _chat_cache.set(cache_key, {"answer": answer, "sources": sources})
-    return {"answer": answer, "sources": sources, "timings": timings}
+    # 缓存答案、来源与 Wiki 状态；耗时每次重新统计
+    _chat_cache.set(cache_key, {"answer": answer, "sources": sources, "wiki": wiki_info})
+    return {"answer": answer, "sources": sources, "wiki": wiki_info, "timings": timings}
 
 
 def chat(
@@ -531,7 +558,8 @@ def chat(
     - 不传 conversation_id 时新建对话（标题取 query 前 30 字）
     - 取最近 chat_history_rounds 轮历史作为多轮上下文
     - 同用户同问题+同历史 10 分钟内命中缓存，跳过检索+LLM，但仍记录消息
-    - 返回：{answer, sources, conversation_id, timings}（timings 为各阶段耗时，毫秒）
+    - 返回：{answer, sources, wiki, conversation_id, timings}
+      wiki = {used, count, error} 标识本次是否命中 Wiki 页面（可观测信号）
     """
     t_start = time.perf_counter()
 
@@ -547,6 +575,7 @@ def chat(
     result = _chat_generate(query, user_id, history, use_rerank=use_rerank)
     answer = result["answer"]
     sources = result["sources"]
+    wiki_info = result.get("wiki", {"used": False, "count": 0, "error": None})
     timings = result.get("timings", {})
 
     # 3. 新对话此时才创建
@@ -569,6 +598,7 @@ def chat(
     return {
         "answer": answer,
         "sources": sources,
+        "wiki": wiki_info,
         "conversation_id": conversation_id,
         "timings": timings,
     }
@@ -583,12 +613,13 @@ def chat_stream(
     """流式问答：逐 token yield 内容，结束后落库
 
     生成器 yield 的内容：
-      - {"type": "start", "conversation_id": str, "sources": list, "timings": dict}
+      - {"type": "start", "conversation_id": str, "sources": list, "wiki": dict, "timings": dict}
       - {"type": "token", "content": str}  (多次)
-      - {"type": "done", "timings": dict}
+      - {"type": "done", "wiki": dict, "timings": dict}
+    wiki = {used, count, error} 标识本次是否命中 Wiki 页面（可观测信号）。
 
     timings（秒，3 位小数）：embed_query_s / vector_search_s / bm25_s / pg_fetch_s /
-    rerank_s / retrieve_total_s / llm_ttft_s（模型首字延迟）/ llm_s（生成总时长）/
+    rerank_s / retrieve_total_s / wiki_s / llm_ttft_s（模型首字延迟）/ llm_s（生成总时长）/
     total_s（服务端从接收到全部完成的总耗时）；缓存命中时 cached=True。
     """
     t_start = time.perf_counter()
@@ -608,52 +639,47 @@ def chat_stream(
     # 3. 查缓存
     cache_key = _chat_cache_key(query, user_id, history, use_rerank)
     cached = _chat_cache.get(cache_key)
+    wiki_info: Dict[str, Any] = {"used": False, "count": 0, "error": None}
 
     if cached is not None:
         # 缓存命中：把答案拆成小块"流式"吐出，保证 UX 一致
         answer = cached["answer"]
         sources = cached["sources"]
+        wiki_info = cached.get("wiki", wiki_info)
         timings: Dict[str, Any] = {"cached": True}
         yield {"type": "start", "conversation_id": conversation_id,
-               "sources": sources, "timings": dict(timings)}
+               "sources": sources, "wiki": dict(wiki_info), "timings": dict(timings)}
         chunk_size = 3
         for i in range(0, len(answer), chunk_size):
             yield {"type": "token", "content": answer[i:i + chunk_size]}
     else:
-        # 缓存未命中：检索 + 流式生成
+        # 缓存未命中：检索（含 Wiki）+ 流式生成
         timings = {}
-        sources = retrieve(query, user_id=user_id, use_rerank=use_rerank, timings=timings)
-        if not sources:
-            answer = "知识库中没有相关内容，请尝试其他问题。"
-            context_msg = query
-        else:
-            context_parts = []
-            for i, s in enumerate(sources, 1):
-                section = f"[{s['section']}] " if s.get("section") else ""
-                context_parts.append(f"[{i}] {section}{s['content']}")
-            context = "\n\n".join(context_parts)
-            context_msg = f"上下文：\n{context}\n\n用户问题：{query}"
-
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        for m in history:
-            messages.append({"role": m["role"], "content": m["content"]})
-        messages.append({"role": "user", "content": context_msg})
+        messages, sources, wiki_info = _build_chat_messages(
+            query, user_id, history, use_rerank, timings
+        )
 
         # start 事件带检索阶段耗时快照（dict 拷贝，避免后续生成耗时覆盖）
         yield {"type": "start", "conversation_id": conversation_id,
-               "sources": sources, "timings": dict(timings)}
+               "sources": sources, "wiki": dict(wiki_info), "timings": dict(timings)}
 
-        answer_parts = []
-        t_llm = time.perf_counter()
-        for token in llm_client.chat_stream(messages):
-            if "llm_ttft_s" not in timings:
-                timings["llm_ttft_s"] = _sec(time.perf_counter() - t_llm)
-            answer_parts.append(token)
-            yield {"type": "token", "content": token}
-        answer = "".join(answer_parts)
-        timings["llm_s"] = _sec(time.perf_counter() - t_llm)
+        if not sources:
+            # 无任何资料：不调 LLM，直接兜底（逐字吐出）
+            answer = "知识库中没有相关内容，请尝试其他问题。"
+            for i in range(0, len(answer), 3):
+                yield {"type": "token", "content": answer[i:i + 3]}
+        else:
+            answer_parts = []
+            t_llm = time.perf_counter()
+            for token in llm_client.chat_stream(messages):
+                if "llm_ttft_s" not in timings:
+                    timings["llm_ttft_s"] = _sec(time.perf_counter() - t_llm)
+                answer_parts.append(token)
+                yield {"type": "token", "content": token}
+            answer = "".join(answer_parts)
+            timings["llm_s"] = _sec(time.perf_counter() - t_llm)
         timings["cached"] = False
-        _chat_cache.set(cache_key, {"answer": answer, "sources": sources})
+        _chat_cache.set(cache_key, {"answer": answer, "sources": sources, "wiki": wiki_info})
 
     # 4. 落库
     MessageRepository.create(conversation_id, role="user", content=query)
@@ -668,4 +694,4 @@ def chat_stream(
     # 5. 总耗时 = 从接收请求到落库完成
     timings["total_s"] = _sec(time.perf_counter() - t_start)
 
-    yield {"type": "done", "timings": timings}
+    yield {"type": "done", "wiki": dict(wiki_info), "timings": timings}

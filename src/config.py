@@ -85,6 +85,19 @@ class Settings:
     chat_cache_maxsize: int = int(os.getenv("CHAT_CACHE_MAXSIZE", "500"))  # 最大缓存条目（LRU）
     chat_cache_history_sig_len: int = int(os.getenv("CHAT_CACHE_HISTORY_SIG_LEN", "20"))  # 历史签名取每条前 N 字
 
+    # LLM Wiki（自动从已入库文档生成可浏览、可溯源、带互链的知识页面）
+    wiki_enabled: bool = os.getenv("WIKI_ENABLED", "true").lower() == "true"
+    wiki_in_chat: bool = os.getenv("WIKI_IN_CHAT", "true").lower() == "true"   # 问答时是否引入 Wiki 上下文
+    wiki_auto_regen: bool = os.getenv("WIKI_AUTO_REGEN", "false").lower() == "true"  # 入库后是否自动防抖重生成
+    wiki_max_pages: int = int(os.getenv("WIKI_MAX_PAGES", "40"))              # 单用户最大页面数（聚类上限，控成本）
+    wiki_chunks_per_page: int = int(os.getenv("WIKI_CHUNKS_PER_PAGE", "10"))  # 每页生成时召回的 chunk 数
+    wiki_cluster_sim_threshold: float = float(os.getenv("WIKI_CLUSTER_SIM_THRESHOLD", "0.75"))  # 聚类余弦相似度阈值
+    wiki_min_cluster_size: int = int(os.getenv("WIKI_MIN_CLUSTER_SIZE", "2")) # 小于此数的碎片聚类合并处理
+    wiki_concurrency: int = int(os.getenv("WIKI_CONCURRENCY", "3"))           # 页面生成并发数
+    wiki_max_chunks: int = int(os.getenv("WIKI_MAX_CHUNKS", "5000"))          # 参与聚类的最大 chunk 数（防超大用户）
+    wiki_small_doc_max_bytes: int = int(os.getenv("WIKI_SMALL_DOC_MAX_BYTES", str(2 * 1024 * 1024)))  # ≤ 此字节数视为小文档，默认参与 Wiki 生成
+    qdrant_wiki_collection: str = os.getenv("QDRANT_WIKI_COLLECTION", "rag_wiki")  # Wiki 页面向量集合名
+
     # JWT 鉴权
     jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production")
     jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")

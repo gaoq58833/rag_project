@@ -52,6 +52,23 @@ def bm25_search(query: str, user_id: Optional[str], top_k: int = 10) -> List[Dic
     return db.query_all(sql, (tsquery, user_id, tsquery, top_k))
 
 
+def wiki_bm25_search(query: str, user_id: Optional[str], top_k: int = 10) -> List[Dict[str, Any]]:
+    """关键词召回 Wiki 页面：在 wiki_pages.tsv 上做全文检索，按 ts_rank 排序。"""
+    tokens = tokenize(query)
+    if not tokens:
+        return []
+    tsquery = " | ".join(tokens.split())
+    sql = """
+        SELECT slug, title, summary,
+               ts_rank(tsv, to_tsquery('simple', %s)) AS rank
+        FROM wiki_pages
+        WHERE user_id = %s AND tsv @@ to_tsquery('simple', %s)
+        ORDER BY rank DESC
+        LIMIT %s
+    """
+    return db.query_all(sql, (tsquery, user_id, tsquery, top_k))
+
+
 def rrf_fuse(vector_ids: List[str], bm25_rows: List[Dict[str, Any]], k: int = 60) -> Dict[str, float]:
     """RRF（Reciprocal Rank Fusion）融合两路召回结果
 

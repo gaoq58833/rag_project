@@ -60,6 +60,11 @@ class IngestResponse(BaseModel):
     reused: bool = False
 
 
+class WikiEligibleUpdate(BaseModel):
+    """用户手动切换某文档是否参与 LLM Wiki 生成"""
+    eligible: bool
+
+
 class RetrievedChunk(BaseModel):
     content: str
     section: Optional[str] = None

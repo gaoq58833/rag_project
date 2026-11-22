@@ -1,6 +1,6 @@
 # 📄 RAG 文档处理管线
 
-> 把 PDF / Word / Excel / CSV / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块、Excel/CSV 按 sheet 转行组 Markdown 表格），切成语义完整的检索块后向量化入 Qdrant；JSON / Excel / CSV 只建 PostgreSQL tsvector 倒排索引（`INDEX_TYPE = "bm25"`），跳过 embedding 与 Qdrant。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API。
+> 把 PDF / Word / Excel / CSV / Markdown / HTML / TXT / 图片转成结构化文本（JSON 按记录切块、Excel/CSV 按 sheet 转行组 Markdown 表格），切成语义完整的检索块后向量化入 Qdrant；JSON / Excel / CSV 只建 PostgreSQL tsvector 倒排索引（`INDEX_TYPE = "bm25"`），跳过 embedding 与 Qdrant。业务数据入 PostgreSQL，提供 **入库 → 检索 → 重排 → 问答** 全链路 REST API；并可将分散的 chunk 自动综合成带互链、可溯源的 **LLM Wiki** 知识页面，供浏览、跳转与问答引用。
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 [![CI](https://github.com/gaoq58833/rag_project/actions/workflows/ci.yml/badge.svg)](https://github.com/gaoq58833/rag_project/actions/workflows/ci.yml)
@@ -19,6 +19,9 @@
 - **智能分块**：段落优先的级联降级策略（段落 → 句子 → 字符），表格原子化、图片归属、章节路径溯源
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
 - **RAG 全链路**：入库（解析→分块→向量化/倒排）→ 混合召回（向量语义 + BM25 关键词 → RRF 融合）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
+- **LLM Wiki 自动生成**：把分散的 chunk 按语义聚类、LLM 批量命名、逐页综合成带 `[[互链]]` 的 Markdown 知识页；每段强制标注来源 chunk，非法引用直接丢弃，页面可溯源到原始文件章节；支持全量重建、单页重写、页面关系图
+- **Wiki 问答融合**：问答时**永远融合** Wiki 页面 + 传统 chunk（不做二选一），Wiki 块优先注入上下文，回答用 `[[页面标题]]` 标注并可点击跳转；响应带 `used/count/error` 可观测信号，Wiki 检索失败自动降级为纯 chunk 问答
+- **Wiki 文档准入**：按文件大小自动判定（≤ 2MB 小文档默认参与），大文档默认只走传统检索，前端可逐文档手动开关
 - **检索可观测**：`retrieve()` 支持 `use_bm25=False` 切换纯向量模式，用于 A/B 对比评测；100 题实测混合检索 Hit Rate@3 比纯向量高 8%、MRR 高 0.068
 - **流式输出**：`/chat/stream` SSE 接口，逐 token 渲染回答，缓存命中时模拟流式保持体验一致
 - **问答缓存**：同用户同问题+同历史 10 分钟内直接返回（TTL=600s，maxsize=500，LRU 淘汰），跳过检索+LLM，响应从 4s 降到 50ms
@@ -26,7 +29,7 @@
 - **文档热更新**：`PUT /documents/{id}` 上传新文件即可替换旧内容，文档 ID 不变；旧 chunks/向量按引用计数清理后后台重新入库，问答缓存自动失效，无需重启服务
 - **用户隔离**：文档/对话按 user_id 归属，只能查看和删除自己的资源
 - **业务库**：完整 chunk 数据入 PostgreSQL（JSONB），Qdrant 只存向量 + 最小 payload，检索后回查 PG
-- **Web 前端**：赛博终端风格单页应用，支持文档管理、多轮对话、流式渲染（「正在搜索知识库 → 正在生成回答」动态状态提示）、引用来源与链路耗时展示
+- **Web 前端**：赛博终端风格单页应用，支持文档管理（含「参与 Wiki」开关）、多轮对话、流式渲染（「正在搜索知识库 → 正在生成回答」动态状态提示）、引用来源与链路耗时展示；新增 **Wiki 标签页**：页面目录、Markdown 正文、`[[互链]]`跳转、溯源来源、SVG 力导向关系图、生成进度条与站内搜索，问答回答中的 `[[页面]]` 亦可直接点击跳转
 - **用户头像**：顶栏点击上传自定义头像（jpg/jpeg/png/webp/gif，≤2MB），顶栏与聊天消息实时显示；URL 带 `?v=` 版本号，换头像后浏览器不读旧缓存
 - **注册可选 token 有效期**：注册时可选 24 小时（默认）/ 一周 / 一个月 / 一年，JWT `exp` 按选择签发；登录沿用 `JWT_EXPIRE_MINUTES`（默认 24h）
 - **模型降级**：问答 / 向量 / 图片理解 / 重排主模型调用失败时，自动切换百炼备用模型重试一次（`LLM_FALLBACK_MODEL` 等可配）；流式回答中途断连时，已输出的半截答案作为 assistant 消息 + 续写指令交给备用模型**从断点接续生成**，前端无感知不重复；只降级一次，备用再失败则抛错
@@ -147,6 +150,7 @@ print(result.raw_text)      # 完整 markdown 文本
 - [处理流程](#-处理流程)
 - [核心模块](#-核心模块)
 - [RAG 数据链路](#-rag-数据链路)
+- [LLM Wiki](#-llm-wiki)
 - [HTTP API](#-http-apifastapi)
 - [Docker 部署](#-docker-部署)
 - [测试与评测](#-测试与评测)
@@ -169,7 +173,8 @@ print(result.raw_text)      # 完整 markdown 文本
 检索： query ──> 向量化 ──> Qdrant 语义召回(top_k=10) ─┐
          └──> jieba 分词 ──> PG tsvector BM25 召回(top_k=15) ─┴─> RRF 融合
                                                                               └──> 回查 PG ──> 重排(top_n=3) ──> 相关块
-问答： 相关块 ──> 构造上下文 ──> LLM 生成回答 + 引用来源
+问答： 相关块 + Wiki 页面（融合召回） ──> 构造上下文 ──> LLM 生成回答 + 引用来源
+Wiki： 参与文档的 chunks ──> 语义聚类 ──> LLM 命名 ──> 逐页综合 ──> 溯源校验 ──> wiki_pages + rag_wiki 向量
 ```
 
 | 环节       | 模块                                         | 说明                                                                                |
@@ -191,6 +196,9 @@ print(result.raw_text)      # 完整 markdown 文本
 | 业务库     | `src/db/database.py` / `repository.py`       | PostgreSQL 连接池 + documents/chunks CRUD，启动自动建表                             |
 | RAG 管线   | `src/rag/pipeline.py`                        | ingest_file / retrieve / chat 三函数，串联全链路                                    |
 | 全文检索   | `src/db/fts.py`                              | jieba 分词 + PG tsvector BM25 + RRF 融合，与向量检索互补                            |
+| Wiki 生成  | `src/wiki/generator.py`                      | chunk 向量聚类 → LLM 批量命名 → 逐页综合 → 溯源校验 → 互链白名单，产出 WikiPageDraft |
+| Wiki 编排  | `src/wiki/service.py`                        | 异步任务/进度、全量重建、向量索引、页面详情溯源、关系图、单页重写、检索融合          |
+| Wiki 问答  | `src/wiki/chat_integration.py`               | torch-free 的上下文组装：Wiki 页 + chunk 融合注入，失败降级与可观测信号              |
 | 评测       | `量化/eval_chunks.py`、`量化/eval_tables.py` | 百分制打分 / 表格准确率比对，结果写入 `量化/指标记录.md`                            |
 | 评测       | `量化/eval_retrieval.py`                     | 检索层 A/B 对比（纯向量 vs 混合），Hit Rate@K + MRR                                 |
 | 评测       | `量化/eval_generation_ragas.py`              | 生成层评测（RAGAS LLM-as-judge），faithfulness / context_precision / context_recall |
@@ -461,6 +469,80 @@ retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生�
 
 ---
 
+## 🧬 LLM Wiki
+
+传统 RAG 的知识是「碎片化」的：一个概念往往散落在多个文档的多个 chunk 里，检索只能召回其中几块，模型需要自己拼。**LLM Wiki** 在入库之后增加一层「综合」——把分散的 chunk 聚类、命名、写成带互链的 Markdown 知识页，形成一份可浏览、可跳转、可溯源的知识地图；问答时再与原始 chunk 一起注入，让回答既有全局结构又有原文细节。
+
+### 生成流程
+
+```text
+用户点击「生成 Wiki」（POST /wiki/generate，异步任务）
+  │
+  ├─ 1. 载入素材：PG 取 wiki_eligible=true 文档的 chunk 内容 + Qdrant 取对应向量
+  ├─ 2. 语义聚类：余弦相似度连通分量（WIKI_CLUSTER_SIM_THRESHOLD=0.75）
+  │       └─ 超过 WIKI_MAX_PAGES 时按质心合并最近簇；碎片簇并入最近类
+  ├─ 3. 批量命名：一次 LLM 调用为所有簇起标题 + 摘要（失败回退「知识页 N」，不阻断）
+  ├─ 4. 逐页生成：并发（WIKI_CONCURRENCY=3）调 LLM，把该簇 chunk 综合成 Markdown 页面
+  │       └─ 每页强制输出 paragraphs[].chunk_ids 溯源 + outgoing_links 互链白名单
+  ├─ 5. 溯源校验：非法 chunk_id 引用整段丢弃；整页无有效依据则标记 failed
+  ├─ 6. 全量重建：清空该用户旧页面 + 旧 rag_wiki 向量，逐页 upsert + 批量 embed 建索引
+  └─ 7. 任务收尾：wiki_jobs 标记 done/failed，清空问答缓存
+```
+
+### 防幻觉硬约束
+
+Wiki 页面是「二次加工」产物，最容易出的问题是模型自由发挥。生成 prompt 与校验层做了四道约束：
+
+1. **只能用给定资料**：page prompt 中 chunk 作为独立上下文注入，明确禁止引入资料外信息
+2. **每段必须标注来源**：LLM 必须输出 `paragraphs[].chunk_ids`，且只能是本次提供的合法 chunk id
+3. **非法引用整段丢弃**：校验时 `chunk_ids` 出现任何不存在的 id，该段直接删除，不进入页面
+4. **互链白名单**：`outgoing_links` 只能填本次生成的全部页面标题，其余一律忽略，避免凭空造链接
+
+> 全页段落都无有效依据时，页面状态置为 `failed` 并记录原因，不会以「看似正常」的空页混入知识库。
+
+### 文档准入策略
+
+按**文件大小**判断是否自动参与 Wiki（`WIKI_SMALL_DOC_MAX_BYTES`，默认 2MB）：
+
+| 文档 | 入库时 `wiki_eligible` | 行为 |
+| ---- | ---------------------- | ---- |
+| ≤ 2MB 小文档 | `true` | 自动参与 Wiki 生成 |
+| > 2MB 大文档 | `false` | 只走传统检索，不参与生成 |
+| 用户手动切换 | 以最后一次为准 | 前端文档列表开关 → `PATCH /documents/{id}/wiki-eligible` |
+
+生成时只看 `wiki_eligible=true` 的文档；**检索时不做筛选**，Wiki 页面与传统 chunk 永远一起召回。
+
+### 问答融合
+
+`WIKI_IN_CHAT=true`（默认）时，问答链路在 chunk 检索之后追加一次 Wiki 页面召回（向量 + BM25 RRF 融合，取 top-2）：
+
+```text
+query ─┬─> chunk 混合检索（向量 + BM25 + RRF）──┐
+       └─> Wiki 页面检索（rag_wiki 向量 + tsvector）─┴─> 组装上下文
+                                                        ├─ ## 知识库结构化页面（Wiki）  ← 在前，优先综合
+                                                        ├─ ## 文档片段                ← 在后，补充细节
+                                                        └─ 用户问题
+```
+
+- **不做二选一**：两路都注入，避免 Wiki 未覆盖时漏内容
+- **回答可点击**：模型被要求用 `[[页面标题]]` 标注 Wiki 引用，前端渲染成链接直达页面
+- **可观测**：`/chat` 响应与 `/chat/stream` 的 `start`/`done` 事件都带 `wiki: {used, count, error}`
+- **失败降级**：Wiki 检索异常时记录 `error` 并自动降级为纯 chunk 问答，不阻断回答
+- **chunk 为空但 Wiki 命中时仍会调 LLM**，不会误触发「知识库中没有相关内容」兜底
+
+### 数据表
+
+| 表           | 关键字段                                                                                       | 说明 |
+| ------------ | ---------------------------------------------------------------------------------------------- | ---- |
+| `wiki_pages` | id, user_id(FK), slug, title, summary, content_md, paragraphs(JSONB), outgoing_links(JSONB), source_chunk_ids(JSONB), status, tsv, created_at, updated_at | 每个 Wiki 页面一条；`paragraphs` 存段落级溯源，`outgoing_links` 存目标 slug，唯一索引 `(user_id, slug)` |
+| `wiki_jobs`  | id, user_id(FK), status, page_total, page_done, error_msg, created_at, updated_at              | 异步生成任务进度，同用户同时只保留一个进行中任务（重复提交自动复用） |
+
+`documents` 表新增 `file_size BIGINT` 与 `wiki_eligible BOOLEAN`（默认 `false`）。Wiki 页面向量存独立集合 `rag_wiki`（`QDRANT_WIKI_COLLECTION`），与 `rag_chunks` / `rag_images` 隔离。
+
+> 除「生成 Wiki」外，`WIKI_AUTO_REGEN=true` 可在每次入库完成后防抖（30s）自动重生成；默认关闭，避免频繁上传时反复消耗 LLM。
+
+---
+
 ## 🌐 HTTP API（FastAPI）
 
 ### 启动
@@ -487,6 +569,14 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 | GET    | `/documents`                   | 是   | 获取当前用户的文档列表（用户隔离）                                      |
 | DELETE | `/documents/{id}`              | 是   | 删除文档及其向量（共享向量按引用计数安全清理）                          |
 | PUT    | `/documents/{id}`              | 是   | 热更新文档内容：multipart 上传新文件，ID 不变，后台重新入库             |
+| PATCH  | `/documents/{id}/wiki-eligible` | 是  | 切换文档是否参与 Wiki 生成，body `{"eligible": true}`                   |
+| POST   | `/wiki/generate`               | 是   | 触发当前用户 Wiki 生成（异步），已有进行中任务则复用（返回 `reused`）  |
+| GET    | `/wiki/status`                 | 是   | 最近一次生成任务状态与进度（`page_done/page_total`）                    |
+| GET    | `/wiki/pages`                  | 是   | Wiki 页面列表（侧边目录，不含正文大字段）                               |
+| GET    | `/wiki/pages/{slug}`           | 是   | 页面详情：Markdown 正文 + 段落溯源 + 引用来源（文件名/章节/原文）       |
+| POST   | `/wiki/search`                 | 是   | Wiki 站内搜索（`?query=xxx`，向量 + BM25 RRF 融合）                     |
+| GET    | `/wiki/graph`                  | 是   | 页面关系图：`nodes` + `edges`（已过滤指向不存在页面的边）               |
+| POST   | `/wiki/pages/{slug}/regenerate` | 是  | 基于该页现有来源 chunk 重写单页（不重新聚类）                           |
 | POST   | `/retrieve`                    | 是   | `query` → 向量召回 → 重排 → 返回相关块（含来源）                        |
 | POST   | `/search/image`                | 是   | 上传图片 → 多模态向量检索相似图片（以图搜图，返回描述 + 原图路径）      |
 | POST   | `/chat`                        | 是   | `query` → 检索 → LLM 生成回答 + 引用来源，支持多轮对话                  |
@@ -507,6 +597,9 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 `/users/me/avatar` 用 multipart 上传头像；登录与 `/auth/me` 响应的 `avatar_url` 带 `?v=<文件修改时间>` 版本号，头像文件存于 `data/avatars/` 并通过 `/avatars/` 静态路径访问。
 `PUT /documents/{id}` 用 multipart 上传新文件热更新文档：新文件 SHA-256 与旧内容相同则直接返回「内容未变化」；否则删除旧 chunks/向量（共享向量按引用计数保留），文档 ID 不变，状态置为 `processing` 后后台重新解析入库，前端轮询 `/documents` 即可看到进度。
 `/chat` 请求体：`{"query": "...", "use_rerank": true, "conversation_id": "可选"}`。
+`POST /wiki/generate` 返回 `{job_id, status, reused}`；`reused=true` 表示复用进行中任务，不会再重复消耗 LLM。前端应轮询 `/wiki/status` 直到 `done`/`failed`。
+`/chat` 与 `/chat/stream` 响应新增 `wiki: {"used": true, "count": 2, "error": null}`；`sources` 中的 Wiki 页面项带 `"type": "wiki"` 与 `slug`，可与文档片段区分渲染。
+`WIKI_ENABLED=false` 时服务不注册任何 `/wiki/*` 路由。
 
 ### 调用示例
 
@@ -568,6 +661,34 @@ with requests.post(f"{BASE}/chat/stream", json={"query": "RNN 是什么？"}, he
                 print(event["content"], end="", flush=True)
             elif event["type"] == "done":
                 print()
+
+# LLM Wiki：触发全量生成 → 轮询进度 → 浏览页面
+r = requests.post(f"{BASE}/wiki/generate", headers=headers)
+job = r.json()
+print(f"任务 {job['job_id']} status={job['status']} reused={job['reused']}")
+
+import time
+while True:
+    s = requests.get(f"{BASE}/wiki/status", headers=headers).json()
+    if s["status"] in ("done", "failed"):
+        break
+    print(f"生成中 {s.get('page_done', 0)}/{s.get('page_total', 0)}")
+    time.sleep(2)
+
+pages = requests.get(f"{BASE}/wiki/pages", headers=headers).json()["pages"]
+for p in pages:
+    print(f"- {p['title']} ({p['slug']})")
+
+# 页面详情（含段落溯源与引用来源）
+if pages:
+    detail = requests.get(f"{BASE}/wiki/pages/{pages[0]['slug']}", headers=headers).json()
+    print(detail["content_md"][:200])
+    for src in detail["sources"]:
+        print(f"  来源: {src['filename']} > {src['section']}")
+
+# 关系图：节点 + 边
+graph = requests.get(f"{BASE}/wiki/graph", headers=headers).json()
+print(f"{len(graph['nodes'])} 个节点，{len(graph['edges'])} 条边")
 ```
 
 ```bash
@@ -589,6 +710,22 @@ curl -X POST http://localhost:8000/chat \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"query": "循环神经网络的工作原理"}'
+
+# 生成 Wiki（异步）→ 查进度 → 列页面
+curl -X POST http://localhost:8000/wiki/generate -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8000/wiki/status -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8000/wiki/pages -H "Authorization: Bearer $TOKEN"
+
+# 页面详情 / 关系图 / 站内搜索 / 单页重写
+curl http://localhost:8000/wiki/pages/rnn -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8000/wiki/graph -H "Authorization: Bearer $TOKEN"
+curl -X POST "http://localhost:8000/wiki/search?query=RNN" -H "Authorization: Bearer $TOKEN"
+curl -X POST http://localhost:8000/wiki/pages/rnn/regenerate -H "Authorization: Bearer $TOKEN"
+
+# 关闭/开启某文档的 Wiki 参与
+curl -X PATCH http://localhost:8000/documents/<document_id>/wiki-eligible \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"eligible": false}'
 ```
 
 > 不支持的格式返回 `400`，解析失败 / API Key 未配置返回 `500`。
@@ -656,6 +793,12 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 | `python tests/test_image_search.py` | 以图搜图：多模态 embedding（mock）、图片集合检索、用户隔离 |
 | `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理   |
 | `python tests/test_api.py`      | FastAPI 接口：health/parse/chunk/错误处理      |
+| `python tests/test_wiki_json.py` | Wiki 契约：`chat_json` JSON 强约束与解析失败抛错 |
+| `python tests/test_wiki_generator.py` | Wiki 生成内核：聚类/命名/非法引用丢弃/全非法置 failed/空数据/命名回退（mock LLM） |
+| `python tests/test_wiki_service.py` | Wiki 编排：全量重建先删后写、向量索引、任务状态流转、溯源解析、图边过滤、任务去重、异常标记 |
+| `python tests/test_wiki_chat.py` | Wiki 问答融合：上下文优先级、Wiki 失败降级、`used/count/error` 信号、缓存一致性 |
+
+> Wiki 四套测试全部 mock LLM / 向量库 / 数据库，无需启动 PostgreSQL、Qdrant 即可运行；`src/wiki/*` 不依赖 torch。
 
 `test_*.py` 都会报告：解析覆盖率、块数、超限/碎片块、丢失字符、重复字符、章节路径覆盖、图片归属。
 
@@ -761,7 +904,13 @@ src/
     deps.py           get_current_user 鉴权依赖
   rag/                RAG 管线
     pipeline.py       ingest_file / retrieve / chat
+  wiki/               LLM Wiki
+    prompts.py        命名 / 生成 prompt 与 JSON 契约
+    generator.py      聚类 → 命名 → 逐页生成 → 溯源校验（torch-free）
+    service.py        异步任务、全量重建、检索、关系图、单页重写
+    chat_integration.py 问答上下文融合与降级
   config.py           环境变量配置
+src/static/           前端单页应用（index.html）
 tests/                各环节测试脚本
 量化/                 评测脚本与指标记录
 data/                 解析产物 + 本地 Qdrant 数据
@@ -793,6 +942,8 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 3. **docling 上游缺陷**：个别表格最后一行会丢（如 `环节` 表）。
 4. **标题依赖样式**：Word 文档若没用 Heading 样式，无法生成章节路径。
 5. **短块偏多**：表格前引导语必须先落盘，会形成 35–300 字短块，是"表格原子化"的固有代价。
+6. **纯 BM25 文档不参与 Wiki**：JSON / Excel / CSV 只建倒排索引、不写 Qdrant 向量，聚类阶段取不到向量会被跳过；即使 `wiki_eligible=true` 也不会进入对应页面（其内容仍可通过传统检索命中）。
+7. **Wiki 生成有 LLM 成本**：全量重建按簇逐页调用 LLM，页面数受 `WIKI_MAX_PAGES` 约束；重复点击会复用进行中任务，`WIKI_AUTO_REGEN` 默认关闭以避免频繁上传反复生成。
 
 ---
 
@@ -829,6 +980,7 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `QDRANT_API_KEY`    | —                       | Qdrant 服务密钥                                   |
 | `QDRANT_COLLECTION` | `rag_chunks`            | 集合名                                            |
 | `QDRANT_IMAGE_COLLECTION` | `rag_images`      | 图片向量集合名（以图搜图，与文本集合隔离）        |
+| `QDRANT_WIKI_COLLECTION`  | `rag_wiki`        | Wiki 页面向量集合名（与 chunk / image 集合三方隔离） |
 
 ### 业务数据库（PostgreSQL）
 
@@ -886,6 +1038,22 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `JWT_EXPIRE_MINUTES` | `1440`                    | Token 过期时间（分钟，24h）  |
 
 > 注册接口可通过 `expires_in` 覆盖默认有效期（`24h` / `7d` / `30d` / `1y`），仅对本次注册签发的 token 生效。
+
+### LLM Wiki
+
+| 变量                          | 默认值 | 说明                                                             |
+| ----------------------------- | ------ | ---------------------------------------------------------------- |
+| `WIKI_ENABLED`                | `true` | 总开关；`false` 时不注册任何 `/wiki/*` 路由                      |
+| `WIKI_IN_CHAT`                | `true` | 问答时是否融合 Wiki 页面（关闭后完全不调 Wiki 检索，省一次 embedding） |
+| `WIKI_AUTO_REGEN`             | `false` | 入库完成后是否自动重生成（30s 防抖，避免连续上传反复生成）      |
+| `WIKI_SMALL_DOC_MAX_BYTES`    | `2097152` | 小文档阈值（2MB），≤ 该值的文档入库时 `wiki_eligible=true`    |
+| `WIKI_MAX_PAGES`              | `40`   | 单次生成最多页面数，超出按质心合并最近簇                         |
+| `WIKI_CHUNKS_PER_PAGE`        | `10`   | 每页最多引用的 chunk 数（控制单次生成上下文长度）                |
+| `WIKI_CLUSTER_SIM_THRESHOLD`  | `0.75` | 聚类余弦相似度阈值（连通分量），越高页面越多越细                 |
+| `WIKI_MIN_CLUSTER_SIZE`       | `2`    | 最小簇大小，不足的碎片并入最近簇                                 |
+| `WIKI_CONCURRENCY`            | `3`    | 逐页生成的并发数                                                 |
+| `WIKI_MAX_CHUNKS`             | `5000` | 单用户参与生成的 chunk 上限，超出截断                            |
+| `QDRANT_WIKI_COLLECTION`      | `rag_wiki` | Wiki 页面向量集合名                                          |
 
 ### 其他
 

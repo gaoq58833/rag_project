@@ -1,7 +1,9 @@
 """LLM 客户端：embedding / chat / vision / rerank，统一 OpenAI 兼容格式"""
 import base64
+import json
 import logging
-from typing import List, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 import httpx
 from openai import OpenAI
@@ -102,15 +104,103 @@ class LLMClient:
         """对话补全，返回模型输出文本。主模型失败自动降级备用模型重试一次"""
         temperature = settings.llm_temperature if temperature is None else temperature
         max_tokens = settings.llm_max_tokens if max_tokens is None else max_tokens
-        kwargs = dict(messages=messages, temperature=temperature, max_tokens=max_tokens)
+        return self._chat_completion(messages, temperature, max_tokens)
+
+    def _chat_completion(
+        self, messages: List[dict], temperature: float, max_tokens: int, **extra: Any
+    ) -> str:
+        """底层 chat 补全调用（主模型失败自动降级备用模型重试一次），返回文本内容。
+        extra 可传 response_format 等额外参数。"""
+        kwargs: Dict[str, Any] = dict(messages=messages, temperature=temperature, max_tokens=max_tokens)
+        kwargs.update(extra)
         try:
             resp = self.chat_client.chat.completions.create(model=settings.llm_model, **kwargs)
         except Exception as e:
-            if not settings.llm_fallback_model or settings.llm_fallback_model == settings.llm_model:
+            fb = settings.llm_fallback_model
+            if not fb or fb == settings.llm_model:
                 raise
-            logger.warning(f"LLM 主模型 {settings.llm_model} 失败（{e}），降级到 {settings.llm_fallback_model}")
-            resp = self.chat_client.chat.completions.create(model=settings.llm_fallback_model, **kwargs)
+            logger.warning(f"LLM 主模型 {settings.llm_model} 失败（{e}），降级到 {fb}")
+            resp = self.chat_client.chat.completions.create(model=fb, **kwargs)
         return resp.choices[0].message.content or ""
+
+    @staticmethod
+    def _prepend_system(messages: List[dict], instruction: str) -> List[dict]:
+        """在不修改入参的前提下，把 JSON 输出指令并入 system 消息（已有则追加，没有则新建）。"""
+        if not messages:
+            return [{"role": "system", "content": instruction}]
+        if messages[0].get("role") == "system":
+            merged = [dict(messages[0])]
+            merged[0]["content"] = (merged[0].get("content") or "") + "\n\n" + instruction
+            return merged + [dict(m) for m in messages[1:]]
+        return [{"role": "system", "content": instruction}] + [dict(m) for m in messages]
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        """去掉模型可能误输出的 ```json / ``` 围栏，只保留里面的 JSON 文本。"""
+        s = text.strip()
+        m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", s, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+        return s
+
+    def chat_json(
+        self,
+        messages: List[dict],
+        schema_hint: str = "",
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        retries: int = 2,
+    ) -> Dict[str, Any]:
+        """要求模型只输出一个合法 JSON 对象，返回解析后的 dict。
+
+        - schema_hint：JSON 结构说明（字段、类型、约束），会作为 system 指令注入，帮助模型对齐契约。
+        - 优先用 response_format={"type":"json_object"} 强约束；若网关不支持该参数，自动退化为纯 prompt 约束重试。
+        - 失败显式抛 ValueError（不返回空 dict）：JSON 解析失败 / 顶层不是 object 时重试 retries 次，仍失败则抛错，
+          让上层能决定降级或提示，避免静默拿到脏数据。
+        """
+        temperature = settings.llm_temperature if temperature is None else temperature
+        max_tokens = settings.llm_max_tokens if max_tokens is None else max_tokens
+
+        instruction = "你必须只输出一个合法的 JSON 对象（object），不要使用 markdown 代码块，不要输出任何解释文字、前后缀或注释。"
+        if schema_hint:
+            instruction += "\nJSON 结构要求：\n" + schema_hint
+        msgs = self._prepend_system(messages, instruction)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(retries + 1):
+            raw: Optional[str] = None
+            try:
+                raw = self._chat_completion(
+                    msgs, temperature, max_tokens, response_format={"type": "json_object"}
+                )
+            except Exception as e:
+                # 网关可能不支持 response_format 参数：首次失败时退化为纯 prompt 约束再试一次
+                low = str(e).lower()
+                if attempt == 0 and ("response_format" in low or "parameter" in low or "不支持" in str(e)):
+                    logger.warning(f"chat_json response_format 不被支持（{e}），退化为 prompt 约束")
+                    try:
+                        raw = self._chat_completion(msgs, temperature, max_tokens)
+                    except Exception as e2:
+                        last_err = e2
+                        continue
+                else:
+                    last_err = e
+                    continue
+
+            raw = self._strip_code_fence(raw or "")
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as e:
+                last_err = e
+                logger.warning(f"chat_json 解析失败（第 {attempt + 1} 次）: {e}; 片段={raw[:160]!r}")
+                continue
+            if not isinstance(data, dict):
+                last_err = ValueError(f"期望 JSON object，得到 {type(data).__name__}")
+                logger.warning(f"chat_json 顶层非 object（第 {attempt + 1} 次）: {last_err}")
+                continue
+            return data
+
+        raise ValueError(f"chat_json 重试 {retries + 1} 次后仍未得到合法 JSON: {last_err}")
 
     def chat_stream(self, messages: List[dict], temperature: Optional[float] = None, max_tokens: Optional[int] = None):
         """流式对话补全，逐 token yield 文本片段。

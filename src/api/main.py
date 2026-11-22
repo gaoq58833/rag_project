@@ -32,6 +32,7 @@ from src.api.schemas import (
     RegisterRequest,
     RetrieveResponse,
     UserInfo,
+    WikiEligibleUpdate,
 )
 from src.auth import TOKEN_EXPIRY_MINUTES, create_access_token, hash_password, verify_password
 from src.auth.deps import get_current_user
@@ -47,6 +48,7 @@ from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, supported_extensions
 from src.rag import chat as rag_chat, chat_stream as rag_chat_stream, clear_chat_cache, process_ingest, retrieve as rag_retrieve, retrieve_images as rag_retrieve_images, submit_ingest
 from src.vectorstore import image_vector_store, vector_store
+from src.config import settings
 
 
 @asynccontextmanager
@@ -57,6 +59,16 @@ async def lifespan(app: FastAPI):
         print("[startup] PostgreSQL 表结构已初始化")
     except Exception as e:
         print(f"[startup] PostgreSQL 建表失败（请检查数据库连接）：{e}")
+
+    # 打印 LLM Wiki 生效配置（集中可观测，避免功能静默未启用）
+    if settings.wiki_enabled:
+        print(
+            f"[startup] LLM Wiki 已启用：max_pages={settings.wiki_max_pages}, "
+            f"chunks_per_page={settings.wiki_chunks_per_page}, in_chat={settings.wiki_in_chat}, "
+            f"auto_regen={settings.wiki_auto_regen}, collection={settings.qdrant_wiki_collection}"
+        )
+    else:
+        print("[startup] LLM Wiki 已禁用（WIKI_ENABLED=false）")
 
     # 启动时预热 PDFParser（加载 docling 模型），避免首次请求过慢
     try:
@@ -82,6 +94,81 @@ app.add_middleware(
     allow_methods=["*"],          # 允许所有 HTTP 方法
     allow_headers=["*"],          # 允许所有请求头（含 Authorization）
 )
+
+
+def _register_wiki_routes(app: FastAPI):
+    """注册 LLM Wiki 相关路由（仅 WIKI_ENABLED=true 时调用，集中可观测）。"""
+    from src.wiki import service as wiki_service
+
+    @app.post("/wiki/generate", summary="触发该用户 Wiki 生成（异步）")
+    async def wiki_generate(
+        background_tasks: BackgroundTasks,
+        current_user: dict = Depends(get_current_user),
+    ):
+        info = wiki_service.submit_wiki_generation(current_user["id"])
+        if not info["reused"]:
+            background_tasks.add_task(
+                wiki_service.process_wiki_generation, info["job_id"], current_user["id"]
+            )
+        return info
+
+    @app.get("/wiki/status", summary="最近一次 Wiki 生成任务状态")
+    async def wiki_status(current_user: dict = Depends(get_current_user)):
+        job = wiki_service.get_latest_job(current_user["id"])
+        if not job:
+            return {"status": "idle", "page_total": 0, "page_done": 0}
+        return {
+            "status": job["status"],
+            "page_total": job.get("page_total", 0),
+            "page_done": job.get("page_done", 0),
+            "error_msg": job.get("error_msg"),
+            "created_at": job["created_at"].isoformat() if job.get("created_at") else None,
+        }
+
+    @app.get("/wiki/pages", summary="Wiki 页面列表（侧边目录）")
+    async def wiki_list_pages(current_user: dict = Depends(get_current_user)):
+        rows = wiki_service.list_pages(current_user["id"])
+        return {
+            "pages": [
+                {
+                    "slug": r["slug"],
+                    "title": r["title"],
+                    "summary": r.get("summary"),
+                    "status": r.get("status", "ready"),
+                    "updated_at": r["updated_at"].isoformat() if r.get("updated_at") else None,
+                }
+                for r in rows
+            ]
+        }
+
+    @app.get("/wiki/pages/{slug}", summary="Wiki 页面详情（含溯源来源）")
+    async def wiki_page_detail(slug: str, current_user: dict = Depends(get_current_user)):
+        detail = wiki_service.get_page_detail(current_user["id"], slug)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="页面不存在")
+        return detail
+
+    @app.post("/wiki/search", summary="Wiki 站内搜索")
+    async def wiki_search(query: str, current_user: dict = Depends(get_current_user)):
+        return {"results": wiki_service.search_wiki(query, current_user["id"])}
+
+    @app.get("/wiki/graph", summary="Wiki 页面关系图数据")
+    async def wiki_graph(current_user: dict = Depends(get_current_user)):
+        return wiki_service.build_graph(current_user["id"])
+
+    @app.post("/wiki/pages/{slug}/regenerate", summary="重写单个 Wiki 页面（基于其来源 chunk）")
+    async def wiki_regenerate_page(slug: str, current_user: dict = Depends(get_current_user)):
+        try:
+            return wiki_service.regenerate_page(current_user["id"], slug)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+if settings.wiki_enabled:
+    _register_wiki_routes(app)
+else:
+    print("[startup] 跳过 Wiki 路由注册（WIKI_ENABLED=false）")
+
 
 # 分块器参数（可按需调整）
 DEFAULT_CHUNKER = TextChunker(
@@ -359,10 +446,12 @@ async def list_documents(current_user: dict = Depends(get_current_user)):
                 "id": r["id"],
                 "filename": r["filename"],
                 "file_ext": r["file_ext"],
+                "file_size": r.get("file_size"),
                 "chunk_count": r["chunk_count"],
                 "total_pages": r["total_pages"],
                 "status": r.get("status", "completed"),
                 "error_msg": r.get("error_msg"),
+                "wiki_eligible": bool(r.get("wiki_eligible") or False),
                 "uploaded_at": r["uploaded_at"].isoformat() if r.get("uploaded_at") else None,
             }
             for r in rows
@@ -440,10 +529,27 @@ async def update_document(
 
     # 文档行重置为 processing（ID 不变），后台复用异步入库流程
     file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    DocumentRepository.reset_for_update(document_id, filename, file_ext, content_hash)
+    DocumentRepository.reset_for_update(document_id, filename, file_ext, content_hash, len(file_bytes))
     clear_chat_cache()  # 旧内容已删除，立即失效相关问答缓存
     background_tasks.add_task(process_ingest, document_id, file_bytes, filename, current_user["id"])
     return {"document_id": document_id, "status": "processing", "updated": True}
+
+
+@app.patch("/documents/{document_id}/wiki-eligible", summary="切换文档是否参与 LLM Wiki 生成")
+async def set_wiki_eligible(
+    document_id: str,
+    payload: WikiEligibleUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    """小文档默认参与 Wiki 生成，大文档默认关闭；用户可在此手动覆盖。切换后影响下一次 Wiki 生成。需登录。"""
+    doc = DocumentRepository.get_by_id(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    if str(doc.get("user_id") or "") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="无权操作他人文档")
+    DocumentRepository.set_wiki_eligible(document_id, current_user["id"], payload.eligible)
+    clear_chat_cache()  # 检索范围变化，清空问答缓存
+    return {"ok": True, "document_id": document_id, "wiki_eligible": payload.eligible}
 
 
 @app.post(
