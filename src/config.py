@@ -95,7 +95,6 @@ class Settings:
     wiki_min_cluster_size: int = int(os.getenv("WIKI_MIN_CLUSTER_SIZE", "2")) # 小于此数的碎片聚类合并处理
     wiki_concurrency: int = int(os.getenv("WIKI_CONCURRENCY", "3"))           # 页面生成并发数
     wiki_max_chunks: int = int(os.getenv("WIKI_MAX_CHUNKS", "5000"))          # 参与聚类的最大 chunk 数（防超大用户）
-    wiki_small_doc_max_bytes: int = int(os.getenv("WIKI_SMALL_DOC_MAX_BYTES", str(2 * 1024 * 1024)))  # ≤ 此字节数视为小文档，默认参与 Wiki 生成
     qdrant_wiki_collection: str = os.getenv("QDRANT_WIKI_COLLECTION", "rag_wiki")  # Wiki 页面向量集合名
 
     # JWT 鉴权

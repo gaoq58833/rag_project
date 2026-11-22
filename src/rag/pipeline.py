@@ -101,8 +101,8 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
     existing = DocumentRepository.get_by_content_hash(content_hash, user_id=user_id)
     file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     file_size = len(file_bytes)
-    # 小文档默认参与 Wiki 生成，大文档默认关闭（用户可在前端手动切换）
-    wiki_eligible = file_size <= settings.wiki_small_doc_max_bytes
+    # 默认不参与 Wiki 生成；用户在前端文档列表手动开启后才纳入（与文件大小无关）
+    wiki_eligible = False
 
     if existing is not None:
         # 仅同一用户的相同内容才复用（跨用户不复用，保证 Qdrant user_id 过滤隔离）

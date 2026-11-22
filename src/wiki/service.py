@@ -122,6 +122,12 @@ def get_page_detail(user_id: str, slug: str) -> Optional[Dict[str, Any]]:
         return None
     source_ids = page.get("source_chunk_ids") or []
     sources = ChunkRepository.get_sources_by_chunk_ids(user_id, [str(x) for x in source_ids])
+    # 反向链接：其他页面的 outgoing_links 指向本页，用于实现双向跳转
+    backlinks = [
+        {"slug": r["slug"], "title": r["title"], "summary": r.get("summary")}
+        for r in (WikiPageRepository.get_all_by_user(user_id) or [])
+        if r["slug"] != slug and slug in (r.get("outgoing_links") or [])
+    ]
     return {
         "slug": page["slug"],
         "title": page["title"],
@@ -129,6 +135,7 @@ def get_page_detail(user_id: str, slug: str) -> Optional[Dict[str, Any]]:
         "content_md": page.get("content_md"),
         "paragraphs": page.get("paragraphs") or [],
         "outgoing_links": page.get("outgoing_links") or [],
+        "backlinks": backlinks,
         "status": page.get("status", "ready"),
         "error_msg": page.get("error_msg"),
         "updated_at": page["updated_at"].isoformat() if page.get("updated_at") else None,
@@ -200,15 +207,22 @@ def search_wiki(query: str, user_id: str, top_k: int = 10) -> List[Dict[str, Any
 
 
 def build_graph(user_id: str) -> Dict[str, Any]:
-    """关系图：节点 = 页面，边 = outgoing_links 中存在的目标页面。"""
+    """关系图：节点 = 页面，边 = 页面间引用（自动补齐反向边，实现双向）。"""
     rows = WikiPageRepository.get_all_by_user(user_id)
     slug_set = {r["slug"] for r in rows}
     nodes = [{"slug": r["slug"], "title": r["title"], "status": r.get("status", "ready")} for r in rows]
     edges: List[Dict[str, str]] = []
+    seen = set()
     for r in rows:
         for target in r.get("outgoing_links") or []:
-            if target in slug_set and target != r["slug"]:
-                edges.append({"from": r["slug"], "to": target})
+            if target not in slug_set or target == r["slug"]:
+                continue
+            # 单向存储 → 补一条反向边，关系图双向可见
+            for a, b in ((r["slug"], target), (target, r["slug"])):
+                if (a, b) in seen:
+                    continue
+                seen.add((a, b))
+                edges.append({"from": a, "to": b})
     return {"nodes": nodes, "edges": edges}
 
 

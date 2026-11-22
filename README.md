@@ -21,7 +21,7 @@
 - **RAG 全链路**：入库（解析→分块→向量化/倒排）→ 混合召回（向量语义 + BM25 关键词 → RRF 融合）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
 - **LLM Wiki 自动生成**：把分散的 chunk 按语义聚类、LLM 批量命名、逐页综合成带 `[[互链]]` 的 Markdown 知识页；每段强制标注来源 chunk，非法引用直接丢弃，页面可溯源到原始文件章节；支持全量重建、单页重写、页面关系图
 - **Wiki 问答融合**：问答时**永远融合** Wiki 页面 + 传统 chunk（不做二选一），Wiki 块优先注入上下文，回答用 `[[页面标题]]` 标注并可点击跳转；响应带 `used/count/error` 可观测信号，Wiki 检索失败自动降级为纯 chunk 问答
-- **Wiki 文档准入**：按文件大小自动判定（≤ 2MB 小文档默认参与），大文档默认只走传统检索，前端可逐文档手动开关
+- **Wiki 文档准入**：**默认全部不参与**（与文件大小无关），用户在前端文档列表逐个开启 WIKI 开关后才纳入生成；开关即时生效
 - **检索可观测**：`retrieve()` 支持 `use_bm25=False` 切换纯向量模式，用于 A/B 对比评测；100 题实测混合检索 Hit Rate@3 比纯向量高 8%、MRR 高 0.068
 - **流式输出**：`/chat/stream` SSE 接口，逐 token 渲染回答，缓存命中时模拟流式保持体验一致
 - **问答缓存**：同用户同问题+同历史 10 分钟内直接返回（TTL=600s，maxsize=500，LRU 淘汰），跳过检索+LLM，响应从 4s 降到 50ms
@@ -502,15 +502,15 @@ Wiki 页面是「二次加工」产物，最容易出的问题是模型自由发
 
 ### 文档准入策略
 
-按**文件大小**判断是否自动参与 Wiki（`WIKI_SMALL_DOC_MAX_BYTES`，默认 2MB）：
+**默认所有文档都不参与 Wiki 生成**，由用户在前端「文档」页逐个开启 WIKI 开关决定，与文件大小无关：
 
-| 文档 | 入库时 `wiki_eligible` | 行为 |
+| 状态 | 入库时 `wiki_eligible` | 行为 |
 | ---- | ---------------------- | ---- |
-| ≤ 2MB 小文档 | `true` | 自动参与 Wiki 生成 |
-| > 2MB 大文档 | `false` | 只走传统检索，不参与生成 |
-| 用户手动切换 | 以最后一次为准 | 前端文档列表开关 → `PATCH /documents/{id}/wiki-eligible` |
+| 新上传的文档 | `false` | 默认不参与，只走传统检索 |
+| 用户打开 WIKI 开关 | `true` | 纳入下一次 Wiki 生成（`PATCH /documents/{id}/wiki-eligible`） |
+| 用户关闭 WIKI 开关 | `false` | 后续生成不再包含该文档 |
 
-生成时只看 `wiki_eligible=true` 的文档；**检索时不做筛选**，Wiki 页面与传统 chunk 永远一起召回。
+生成时只看 `wiki_eligible=true` 的文档；**检索时不做筛选**，Wiki 页面与传统 chunk 永远一起召回。若一个都没选，前端点「生成 Wiki」会直接提示先去开启开关。
 
 ### 问答融合
 
@@ -1046,7 +1046,6 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | `WIKI_ENABLED`                | `true` | 总开关；`false` 时不注册任何 `/wiki/*` 路由                      |
 | `WIKI_IN_CHAT`                | `true` | 问答时是否融合 Wiki 页面（关闭后完全不调 Wiki 检索，省一次 embedding） |
 | `WIKI_AUTO_REGEN`             | `false` | 入库完成后是否自动重生成（30s 防抖，避免连续上传反复生成）      |
-| `WIKI_SMALL_DOC_MAX_BYTES`    | `2097152` | 小文档阈值（2MB），≤ 该值的文档入库时 `wiki_eligible=true`    |
 | `WIKI_MAX_PAGES`              | `40`   | 单次生成最多页面数，超出按质心合并最近簇                         |
 | `WIKI_CHUNKS_PER_PAGE`        | `10`   | 每页最多引用的 chunk 数（控制单次生成上下文长度）                |
 | `WIKI_CLUSTER_SIM_THRESHOLD`  | `0.75` | 聚类余弦相似度阈值（连通分量），越高页面越多越细                 |

@@ -175,6 +175,7 @@ def test_build_graph_filters_missing():
     assert slugs == {"a", "b"}
     edge_pairs = {(e["from"], e["to"]) for e in g["edges"]}
     assert ("a", "b") in edge_pairs
+    assert ("b", "a") in edge_pairs, "应自动补齐反向边，实现双向关系"
     assert ("a", "ghost") not in edge_pairs, "指向不存在页面的边应被过滤"
 
 
@@ -224,6 +225,7 @@ def test_get_page_detail_sources():
         {"qdrant_point_id": "c1", "content": "原始内容", "section": "1.1",
          "filename": "a.pdf", "chunk_index": 0},
     ]
+    wiki_repo.get_all_by_user = lambda user_id: []
     install(fake_wiki_repo=wiki_repo, fake_chunk_repo=chunk_repo)
 
     detail = service.get_page_detail("u1", "rnn")
@@ -232,6 +234,27 @@ def test_get_page_detail_sources():
     assert len(detail["sources"]) == 1
     assert detail["sources"][0]["filename"] == "a.pdf"
     assert detail["sources"][0]["content"] == "原始内容"
+
+
+def test_get_page_detail_backlinks():
+    wiki_repo = FakeRepo()
+    wiki_repo.get_by_slug = lambda user_id, slug: {
+        "slug": "b", "title": "B", "summary": "sb", "content_md": "body",
+        "paragraphs": [], "outgoing_links": [], "status": "ready",
+        "source_chunk_ids": [], "error_msg": None, "updated_at": None,
+    }
+    wiki_repo.get_all_by_user = lambda user_id: [
+        {"slug": "a", "title": "A", "summary": "sa", "outgoing_links": ["b"]},
+        {"slug": "b", "title": "B", "summary": "sb", "outgoing_links": ["a"]},
+        {"slug": "c", "title": "C", "summary": "sc", "outgoing_links": ["a"]},
+    ]
+    chunk_repo = FakeRepo()
+    chunk_repo.get_sources_by_chunk_ids = lambda user_id, ids: []
+    install(fake_wiki_repo=wiki_repo, fake_chunk_repo=chunk_repo)
+
+    detail = service.get_page_detail("u1", "b")
+    assert [x["slug"] for x in detail["backlinks"]] == ["a"], "只应包含引用了 b 的页面"
+    assert detail["backlinks"][0]["title"] == "A"
 
 
 if __name__ == "__main__":
@@ -243,6 +266,7 @@ if __name__ == "__main__":
         case("build_graph 过滤不存在的链接", test_build_graph_filters_missing),
         case("regenerate_page 单页重写+刷新向量", test_regenerate_page),
         case("get_page_detail 溯源来源解析", test_get_page_detail_sources),
+        case("get_page_detail 反向链接", test_get_page_detail_backlinks),
     ]
     passed = sum(results)
     print(f"\n{passed}/{len(results)} 通过")

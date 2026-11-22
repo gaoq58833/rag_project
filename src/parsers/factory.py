@@ -3,12 +3,14 @@
 所有解析器的 parse() 均不修改实例状态，可安全复用：
 - PDFParser 的 DocumentConverter 加载模型较重，复用可避免重复加载
 - 其他解析器 __init__ 仅创建 TextCleaner/TableProcessor，开销极低，复用也无副作用
+
+注意：PDFParser 依赖 docling→torch，导入会占用大量内存，因此改为首次真正解析
+PDF 时才导入；服务启动与其它格式的解析不会触发这条重依赖链。
 """
 from pathlib import Path
 from typing import Dict, List, Type
 
 from src.parsers.base import BaseParser
-from src.parsers.pdf_parser import PDFParser
 from src.parsers.word_parser import WordParser
 from src.parsers.markdown_parser import MarkdownParser
 from src.parsers.html_parser import HTMLParser
@@ -17,9 +19,11 @@ from src.parsers.json_parser import JSONParser
 from src.parsers.image_parser import ImageParser
 from src.parsers.excel_parser import ExcelParser
 
+# .pdf 不在此表中（PDFParser 延迟导入），supported_extensions / index_type_for 单独处理
+_LAZY_EXTS = {".pdf"}
+
 # 扩展名（小写，含点）-> 解析器类
 _PARSER_REGISTRY: Dict[str, Type[BaseParser]] = {
-    ".pdf": PDFParser,
     ".docx": WordParser,
     ".md": MarkdownParser,
     ".markdown": MarkdownParser,
@@ -55,8 +59,12 @@ def get_parser(file_path: str, **kwargs) -> BaseParser:
     """
     ext = Path(file_path).suffix.lower()
     parser_cls = _PARSER_REGISTRY.get(ext)
+    if parser_cls is None and ext in _LAZY_EXTS:
+        # 延迟导入：docling→torch 依赖重，仅在真正解析 PDF 时加载
+        from src.parsers.pdf_parser import PDFParser
+        parser_cls = PDFParser
     if parser_cls is None:
-        supported = ", ".join(sorted(_PARSER_REGISTRY))
+        supported = ", ".join(supported_extensions())
         raise ValueError(f"不支持的文件格式：{ext!r}，支持的格式：{supported}")
 
     if kwargs:
@@ -90,7 +98,7 @@ def index_type_for(filename: str) -> str:
 
 def supported_extensions() -> List[str]:
     """返回所有支持的扩展名（小写，含点）"""
-    return sorted(_PARSER_REGISTRY)
+    return sorted(set(_PARSER_REGISTRY) | _LAZY_EXTS)
 
 
 def register_parser(ext: str, parser_cls: Type[BaseParser]) -> None:

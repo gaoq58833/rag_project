@@ -959,7 +959,7 @@ async function loadDocuments() {
         <td class="doc-name">${d.filename}<span class="doc-ext">${d.file_ext || ''}</span></td>
         <td>${d.chunk_count || 0} 块</td>
         <td>${statusHtml}${failDetail}</td>
-        <td><span class="wiki-toggle ${d.wiki_eligible ? 'on' : ''}" onclick="toggleDocWiki('${d.id}', this)" title="参与 Wiki 生成（小文档默认开）"></span></td>
+        <td><span class="wiki-toggle ${d.wiki_eligible ? 'on' : ''}" onclick="toggleDocWiki('${d.id}', this)" title="参与 Wiki 生成（手动选择）"></span></td>
         <td class="hint">${time}</td>
         <td><button onclick="updateDoc('${d.id}')">更新</button><button class="danger" onclick="deleteDoc('${d.id}')">删除</button></td>
       `;
@@ -1071,7 +1071,7 @@ async function loadWikiPages() {
 function renderWikiPageList(pages) {
   const list = document.getElementById('wiki-page-list');
   if (!pages.length) {
-    list.innerHTML = '<div class="wiki-empty">// 暂无 Wiki 页面<br>点击「生成 Wiki」从知识库构建<br>小文档默认参与</div>';
+    list.innerHTML = '<div class="wiki-empty">// 暂无 Wiki 页面<br>先在「文档」页开启需要参与的文档（WIKI 开关）<br>再点击「生成 Wiki」</div>';
     return;
   }
   list.innerHTML = pages.map(p => `
@@ -1103,12 +1103,18 @@ function renderWikiDetail(d) {
       `</div>`
     : '';
   const stale = d.status === 'stale' ? '<span class="wp-stale">（来源已变更，建议重写）</span>' : '';
+  const backHtml = (d.backlinks && d.backlinks.length)
+    ? `<div class="wiki-sources"><div class="ws-label">// 被以下页面引用（${d.backlinks.length}）</div>` +
+      d.backlinks.map(b => `<div class="ws-item"><a class="wiki-link" data-title="${escAttr(b.title)}" href="javascript:void(0)">← ${esc(b.title)}</a>${b.summary ? ` <span style="opacity:.7">${esc(b.summary)}</span>` : ''}</div>`).join('') +
+      `</div>`
+    : '';
   const regenBtn = `<button style="font-size:10px;padding:2px 8px;margin-left:10px" onclick="regenerateWikiPage('${d.slug}')">↻ 重写此页</button>`;
   box.innerHTML = `
     <div class="wiki-title">${esc(d.title)} ${stale}</div>
     <div class="wiki-summary">${esc(d.summary || '')}</div>
     <div class="wiki-meta">// slug: ${esc(d.slug)} · 更新于 ${updated} ${regenBtn}</div>
     <div class="md">${renderMarkdown(d.content_md || '')}</div>
+    ${backHtml}
     ${srcHtml}
   `;
 }
@@ -1175,6 +1181,15 @@ async function gotoWikiByTitle(title) {
 // 生成 Wiki
 async function generateWiki() {
   const btn = document.getElementById('wiki-gen-btn');
+  // 前置检查：必须先在文档列表手动开启至少一个「参与 Wiki」开关
+  try {
+    const d = await api('GET', '/documents');
+    const list = d.documents || [];
+    if (!list.some(x => x.wiki_eligible)) {
+      alert('还没有选择参与 Wiki 的文档。\n请先在「文档」页打开对应文档的 WIKI 开关，再生成。');
+      return;
+    }
+  } catch (e) { /* 检查失败不阻塞，交给后端判断 */ }
   btn.disabled = true;
   btn.textContent = '⚡ 生成中...';
   try {
@@ -1272,6 +1287,14 @@ function renderWikiGraph(nodes, edges) {
   const wrap = document.getElementById('wiki-graph-wrap');
   if (!nodes.length) { wrap.innerHTML = '<div class="wiki-empty">// 暂无页面可绘图</div>'; return; }
   const W = wrap.clientWidth || 900, H = wrap.clientHeight || 600;
+  // 后端已补双向边，绘图时按无向去重，避免重复线段与双倍弹簧力
+  const seenEdge = new Set();
+  edges = edges.filter(e => {
+    const k = e.from < e.to ? e.from + '|' + e.to : e.to + '|' + e.from;
+    if (seenEdge.has(k)) return false;
+    seenEdge.add(k);
+    return true;
+  });
   const pos = {};
   const n = nodes.length;
   nodes.forEach((nd, i) => {
