@@ -87,7 +87,7 @@ class Settings:
 
     # LLM Wiki（自动从已入库文档生成可浏览、可溯源、带互链的知识页面）
     wiki_enabled: bool = os.getenv("WIKI_ENABLED", "true").lower() == "true"
-    wiki_in_chat: bool = os.getenv("WIKI_IN_CHAT", "true").lower() == "true"   # 问答时是否引入 Wiki 上下文
+    wiki_in_chat: bool = os.getenv("WIKI_IN_CHAT", "false").lower() == "true"   # 问答时是否引入 Wiki 上下文（默认关闭，仅用传统检索）
     wiki_auto_regen: bool = os.getenv("WIKI_AUTO_REGEN", "false").lower() == "true"  # 入库后是否自动防抖重生成
     wiki_max_pages: int = int(os.getenv("WIKI_MAX_PAGES", "40"))              # 单用户最大页面数（聚类上限，控成本）
     wiki_chunks_per_page: int = int(os.getenv("WIKI_CHUNKS_PER_PAGE", "10"))  # 每页生成时召回的 chunk 数

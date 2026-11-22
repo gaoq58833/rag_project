@@ -528,6 +528,8 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
 .wiki-page-item .wp-summary { color: var(--text-dim); font-size: 10px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-page-item .wp-stale { color: var(--amber); font-size: 9px; margin-left: 4px; }
 .wiki-empty { padding: 24px 16px; color: var(--text-dim); font-size: 11px; text-align: center; line-height: 1.8; }
+.wiki-tip { padding: 8px 14px; font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); line-height: 1.7; }
+.wiki-tip b { color: var(--amber); font-weight: 600; }
 
 /* Wiki 主区 */
 .wiki-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -779,6 +781,7 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
         <input type="text" id="wiki-search-input" placeholder="搜索 Wiki..." style="width:200px" onkeydown="if(event.key==='Enter')searchWikiPages()">
         <button onclick="searchWikiPages()">搜索</button>
       </div>
+      <div class="wiki-tip">💡 建议选择 <b>内容稳定、不常更新、篇幅较小</b> 的文档参与 Wiki 生成；频繁修改或过大的文档容易产生过时、冗长的词条。</div>
       <div class="wiki-layout">
         <div class="wiki-sidebar">
           <div class="wiki-sidebar-header">// 知识页面</div>
@@ -959,7 +962,7 @@ async function loadDocuments() {
         <td class="doc-name">${d.filename}<span class="doc-ext">${d.file_ext || ''}</span></td>
         <td>${d.chunk_count || 0} 块</td>
         <td>${statusHtml}${failDetail}</td>
-        <td><span class="wiki-toggle ${d.wiki_eligible ? 'on' : ''}" onclick="toggleDocWiki('${d.id}', this)" title="参与 Wiki 生成（手动选择）"></span></td>
+        <td><span class="wiki-toggle ${d.wiki_eligible ? 'on' : ''}" onclick="toggleDocWiki('${d.id}', this)" title="参与 Wiki 生成（建议选择内容稳定、不常更新、篇幅较小的文档）"></span></td>
         <td class="hint">${time}</td>
         <td><button onclick="updateDoc('${d.id}')">更新</button><button class="danger" onclick="deleteDoc('${d.id}')">删除</button></td>
       `;
@@ -1071,7 +1074,7 @@ async function loadWikiPages() {
 function renderWikiPageList(pages) {
   const list = document.getElementById('wiki-page-list');
   if (!pages.length) {
-    list.innerHTML = '<div class="wiki-empty">// 暂无 Wiki 页面<br>先在「文档」页开启需要参与的文档（WIKI 开关）<br>再点击「生成 Wiki」</div>';
+    list.innerHTML = '<div class="wiki-empty">// 暂无 Wiki 页面<br>先在「文档」页开启需要参与的文档（WIKI 开关）<br>建议选择内容稳定、不常更新、篇幅较小的文档<br>再点击「生成 Wiki」</div>';
     return;
   }
   list.innerHTML = pages.map(p => `
@@ -1186,7 +1189,7 @@ async function generateWiki() {
     const d = await api('GET', '/documents');
     const list = d.documents || [];
     if (!list.some(x => x.wiki_eligible)) {
-      alert('还没有选择参与 Wiki 的文档。\n请先在「文档」页打开对应文档的 WIKI 开关，再生成。');
+      alert('还没有选择参与 Wiki 的文档。\n请先在「文档」页打开对应文档的 WIKI 开关，再生成。\n建议选择内容稳定、不常更新、篇幅较小的文档。');
       return;
     }
   } catch (e) { /* 检查失败不阻塞，交给后端判断 */ }

@@ -20,7 +20,7 @@
 - **解析器工厂**：按扩展名自动路由 + 单例缓存，PDF 模型只加载一次
 - **RAG 全链路**：入库（解析→分块→向量化/倒排）→ 混合召回（向量语义 + BM25 关键词 → RRF 融合）→ 重排（qwen3-rerank）→ LLM 问答（带引用来源）
 - **LLM Wiki 自动生成**：把分散的 chunk 按语义聚类、LLM 批量命名、逐页综合成带 `[[互链]]` 的 Markdown 知识页；每段强制标注来源 chunk，非法引用直接丢弃，页面可溯源到原始文件章节；支持全量重建、单页重写、页面关系图
-- **Wiki 问答融合**：问答时**永远融合** Wiki 页面 + 传统 chunk（不做二选一），Wiki 块优先注入上下文，回答用 `[[页面标题]]` 标注并可点击跳转；响应带 `used/count/error` 可观测信号，Wiki 检索失败自动降级为纯 chunk 问答
+- **Wiki 问答融合（可选，默认关闭）**：`WIKI_IN_CHAT=true` 时问答在传统 chunk 检索之外追加 Wiki 页面召回，Wiki 块优先注入，回答用 `[[页面标题]]` 标注并可点击跳转；默认 `false`，问答链路只用传统检索
 - **Wiki 文档准入**：**默认全部不参与**（与文件大小无关），用户在前端文档列表逐个开启 WIKI 开关后才纳入生成；开关即时生效
 - **检索可观测**：`retrieve()` 支持 `use_bm25=False` 切换纯向量模式，用于 A/B 对比评测；100 题实测混合检索 Hit Rate@3 比纯向量高 8%、MRR 高 0.068
 - **流式输出**：`/chat/stream` SSE 接口，逐 token 渲染回答，缓存命中时模拟流式保持体验一致
@@ -173,7 +173,7 @@ print(result.raw_text)      # 完整 markdown 文本
 检索： query ──> 向量化 ──> Qdrant 语义召回(top_k=10) ─┐
          └──> jieba 分词 ──> PG tsvector BM25 召回(top_k=15) ─┴─> RRF 融合
                                                                               └──> 回查 PG ──> 重排(top_n=3) ──> 相关块
-问答： 相关块 + Wiki 页面（融合召回） ──> 构造上下文 ──> LLM 生成回答 + 引用来源
+问答： 相关块（默认不含 Wiki） ──> 构造上下文 ──> LLM 生成回答 + 引用来源
 Wiki： 参与文档的 chunks ──> 语义聚类 ──> LLM 命名 ──> 逐页综合 ──> 溯源校验 ──> wiki_pages + rag_wiki 向量
 ```
 
@@ -510,11 +510,11 @@ Wiki 页面是「二次加工」产物，最容易出的问题是模型自由发
 | 用户打开 WIKI 开关 | `true` | 纳入下一次 Wiki 生成（`PATCH /documents/{id}/wiki-eligible`） |
 | 用户关闭 WIKI 开关 | `false` | 后续生成不再包含该文档 |
 
-生成时只看 `wiki_eligible=true` 的文档；**检索时不做筛选**，Wiki 页面与传统 chunk 永远一起召回。若一个都没选，前端点「生成 Wiki」会直接提示先去开启开关。
+生成时只看 `wiki_eligible=true` 的文档。若一个都没选，前端点「生成 Wiki」会直接提示先去开启开关。
 
-### 问答融合
+### 问答融合（可选，默认关闭）
 
-`WIKI_IN_CHAT=true`（默认）时，问答链路在 chunk 检索之后追加一次 Wiki 页面召回（向量 + BM25 RRF 融合，取 top-2）：
+`WIKI_IN_CHAT=false`（默认）时，问答链路只走传统 chunk 混合检索，完全不调用 Wiki 检索。设为 `true` 后，才在 chunk 检索之后追加一次 Wiki 页面召回（向量 + BM25 RRF 融合，取 top-2）：
 
 ```text
 query ─┬─> chunk 混合检索（向量 + BM25 + RRF）──┐
@@ -1044,7 +1044,7 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 | 变量                          | 默认值 | 说明                                                             |
 | ----------------------------- | ------ | ---------------------------------------------------------------- |
 | `WIKI_ENABLED`                | `true` | 总开关；`false` 时不注册任何 `/wiki/*` 路由                      |
-| `WIKI_IN_CHAT`                | `true` | 问答时是否融合 Wiki 页面（关闭后完全不调 Wiki 检索，省一次 embedding） |
+| `WIKI_IN_CHAT`                | `false` | 问答时是否融合 Wiki 页面（默认关闭，只走传统检索） |
 | `WIKI_AUTO_REGEN`             | `false` | 入库完成后是否自动重生成（30s 防抖，避免连续上传反复生成）      |
 | `WIKI_MAX_PAGES`              | `40`   | 单次生成最多页面数，超出按质心合并最近簇                         |
 | `WIKI_CHUNKS_PER_PAGE`        | `10`   | 每页最多引用的 chunk 数（控制单次生成上下文长度）                |
