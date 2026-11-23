@@ -867,6 +867,41 @@ python 量化/eval_retrieval.py alice /tmp/eval_dataset_100.json
 python 量化/eval_generation_ragas.py alice /tmp/eval_dataset_100.json 30
 ```
 
+### LLM Wiki 层评测（4 项核心指标）
+
+> 由 `scripts/eval_wiki.py` 离线直连 PostgreSQL 完成，不经过 HTTP 问答链路，避免污染服务。其中链接正确率与内容覆盖率为纯脚本自动计算，溯源保真率与聚类纯度采用 **LLM-as-Judge**（给裁判「段落/页面 + 引用 chunk 原文」作为锚点，要求只能依据给定资料判断）。全量评测（非抽样），因当前知识库规模较小（9 页 / 24 段）。
+
+**指标定义与目标值：**
+
+| # | 指标 | 测什么 | 计算方式 | 目标 | 测量方式 |
+| - | ---- | ------ | -------- | ---- | -------- |
+| 1 | 溯源保真率 `wiki_faithfulness` | 段落是否真来自引用 chunk（防幻觉） | 可由溯源推导的段落数 / 段落总数 | ≥0.95 | LLM-as-Judge |
+| 2 | 链接正确率 `link_validity` | 互链是否指向真实存在的页面 | 合法 slug 链接数 / 总链接数 | =1.0 | 纯脚本（查 PG） |
+| 3 | 内容覆盖率 `chunk_coverage` | eligible chunk 有没有漏进 Wiki | 被引用 chunk 数 / eligible chunk 总数 | ≥0.95 | 纯脚本（查 PG） |
+| 4 | 聚类纯度 `cluster_purity` | 每个页面是否只讲一个主题 | 主题一致的页面数 / 页面总数 | ≥0.90 | LLM-as-Judge |
+
+**本次实测结果（用户：高铨，9 页 / 24 段 / 9 个 eligible chunk，2026-11-23）：**
+
+| 指标 | 得分 | 明细 | 是否达标 |
+| ---- | ---- | ---- | -------- |
+| 链接正确率 `link_validity` | **1.0000** | 4/4 链接全部有效 | ✅ |
+| 内容覆盖率 `chunk_coverage` | **1.0000** | 9/9 eligible chunk 均被引用 | ✅ |
+| 溯源保真率 `wiki_faithfulness` | **0.8333** | 20/24 段可由来源推导，4 段引入资料外结论 | ⚠️ 未达标 |
+| 聚类纯度 `cluster_purity` | **0.6667** | 6/9 页主题单一，3 页存在异主题混杂 | ⚠️ 未达标 |
+
+**主要问题定位：**
+- **溯源保真**：4 段被判引入资料外内容，典型如将原文的可能性表述（"可能会通过版本偏移转换"）强化为确定性（"会通过版本偏移转换"），以及补全了资料未提及的机制（"重复的请求会被直接拦截"）。说明生成 prompt 对「不得强化语气、不得补全未给出的机制」约束不足。
+- **聚类纯度**：3 页主题混杂，如「长耗时任务异步处理」页混入了 Agent Session 状态存储主题，「多工具异步并发调用」页混入了 FastAPI 阻塞接口讨论。说明聚类阈值偏松，把语义相邻但主题不同的 chunk 合并到了同一页面。
+
+```bash
+# 全量评测（自动选 pages 最多的用户，含 LLM 判分）
+python scripts/eval_wiki.py
+# 只跑纯脚本指标（链接正确率 + 内容覆盖率），不调 LLM
+python scripts/eval_wiki.py --skip-llm
+# 指定用户
+python scripts/eval_wiki.py --user-id <uuid>
+```
+
 ---
 
 ## 📁 目录结构
