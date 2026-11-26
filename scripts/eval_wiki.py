@@ -7,14 +7,16 @@
   4. cluster_purity     — 聚类纯度（LLM-as-Judge）：页面引用的多个 chunk 是否同主题
 
 用法：
-  python scripts/eval_wiki.py                      # 自动选 pages 最多的用户，全量评测
+  python scripts/eval_wiki.py                      # 自动选 pages 最多的用户，默认抽检 20 链接 / 20 chunk / 15 页
   python scripts/eval_wiki.py --user-id <uuid>     # 指定用户
   python scripts/eval_wiki.py --skip-llm           # 只跑纯脚本指标（#1 #4）
+  python scripts/eval_wiki.py --links 0 --chunks 0 --pages 0   # 全量评测
   python scripts/eval_wiki.py --out report.json    # 指定报告输出路径
 """
 import argparse
 import json
 import pathlib
+import random
 import sys
 import time
 from typing import Any, Dict, List
@@ -28,9 +30,28 @@ from src.db.repository import ChunkRepository, WikiPageRepository
 
 # ---------- 工具 ----------
 
+# 固定抽检规模（0 表示全量）；可用量不足时按实际数量评测并告警
+DEFAULT_LINK_SAMPLE = 20
+DEFAULT_CHUNK_SAMPLE = 20
+DEFAULT_PAGE_SAMPLE = 15
+
+
 def _truncate(text: str, limit: int) -> str:
     text = (text or "").strip()
     return text if len(text) <= limit else text[:limit] + "…(截断)"
+
+
+def _sample(items: List[Any], size: int, seed: int = 42) -> List[Any]:
+    """固定随机种子抽检，保证同一批数据每次结果可复现；0 或超出总量时全量。"""
+    if size <= 0 or size >= len(items):
+        return list(items)
+    idx = sorted(random.Random(seed).sample(range(len(items)), size))
+    return [items[i] for i in idx]
+
+
+def _warn_if_short(name: str, available: int, target: int) -> None:
+    if target > 0 and available < target:
+        print(f"警告：{name}只有 {available} 个，少于目标抽检数 {target}，本次按 {available} 个评测。")
 
 
 def _pick_user(user_id: str | None) -> Dict[str, Any]:
@@ -62,22 +83,25 @@ def _load_chunk_map(user_id: str) -> Dict[str, str]:
 
 # ---------- #2 链接正确率（纯脚本） ----------
 
-def eval_link_validity(pages: List[Dict[str, Any]]) -> Dict[str, Any]:
+def eval_link_validity(pages: List[Dict[str, Any]], sample_size: int = 0) -> Dict[str, Any]:
     slug_set = {p["slug"] for p in pages}
-    total = 0
+    pairs = [(p["title"], link) for p in pages for link in (p.get("outgoing_links") or [])]
+    sampled = _sample(pairs, sample_size)
+    _warn_if_short("互链", len(pairs), sample_size)
+
     valid = 0
     invalid: List[Dict[str, str]] = []
-    for p in pages:
-        for link in (p.get("outgoing_links") or []):
-            total += 1
-            if link in slug_set:
-                valid += 1
-            else:
-                invalid.append({"page": p["title"], "broken_slug": link})
-    value = (valid / total) if total else 1.0
+    for title, link in sampled:
+        if link in slug_set:
+            valid += 1
+        else:
+            invalid.append({"page": title, "broken_slug": link})
+    value = (valid / len(sampled)) if sampled else 1.0
     return {
         "value": round(value, 4),
-        "total": total,
+        "total": len(pairs),
+        "sample_target": sample_size,
+        "sampled": len(sampled),
         "valid": valid,
         "invalid": invalid,
     }
@@ -85,20 +109,26 @@ def eval_link_validity(pages: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 # ---------- #3 内容覆盖率（纯脚本） ----------
 
-def eval_chunk_coverage(user_id: str, pages: List[Dict[str, Any]]) -> Dict[str, Any]:
+def eval_chunk_coverage(user_id: str, pages: List[Dict[str, Any]],
+                        sample_size: int = 0) -> Dict[str, Any]:
     elig = ChunkRepository.get_wiki_eligible_chunks(user_id)
     elig_ids = {str(c["qdrant_point_id"]) for c in elig}
+    sampled_ids = _sample(sorted(elig_ids), sample_size)
+    _warn_if_short("eligible chunk", len(elig_ids), sample_size)
+
     used: set = set()
     for p in pages:
         for cid in (p.get("source_chunk_ids") or []):
             used.add(str(cid))
-    covered = used & elig_ids
-    uncovered = sorted(elig_ids - used)
+    covered = [cid for cid in sampled_ids if cid in used]
+    uncovered = [cid for cid in sampled_ids if cid not in used]
     dangling = sorted(used - elig_ids)  # 引用了非 eligible 或不存在的 chunk
-    value = (len(covered) / len(elig_ids)) if elig_ids else 1.0
+    value = (len(covered) / len(sampled_ids)) if sampled_ids else 1.0
     return {
         "value": round(value, 4),
         "total": len(elig_ids),
+        "sample_target": sample_size,
+        "sampled": len(sampled_ids),
         "covered": len(covered),
         "uncovered": uncovered,
         "dangling_refs": dangling,
@@ -186,15 +216,18 @@ def _judge_purity(title: str, sources_text: str, llm_client) -> Dict[str, Any] |
         return {"error": str(e)[:200]}
 
 
-def eval_cluster_purity(pages, chunk_map: Dict[str, str], llm_client) -> Dict[str, Any]:
-    total = 0
+def eval_cluster_purity(pages, chunk_map: Dict[str, str], llm_client,
+                        sample_size: int = 0) -> Dict[str, Any]:
+    sampled_pages = _sample(list(pages), sample_size)
+    _warn_if_short("Wiki 页面", len(pages), sample_size)
+
+    total = len(pages)
     pure = 0
     impure: List[Dict[str, str]] = []
     judge_errors = 0
-    for p in pages:
+    for p in sampled_pages:
         src_ids = [str(x) for x in (p.get("source_chunk_ids") or [])]
         srcs = "\n---\n".join(_truncate(chunk_map.get(cid, "(来源缺失)"), 500) for cid in src_ids) or "(无)"
-        total += 1
         res = _judge_purity(p["title"], _truncate(srcs, 2200), llm_client)
         if res is None or "error" in res:
             judge_errors += 1
@@ -203,11 +236,13 @@ def eval_cluster_purity(pages, chunk_map: Dict[str, str], llm_client) -> Dict[st
             pure += 1
         else:
             impure.append({"page": p["title"], "reason": res.get("reason", "")})
-    scored = total - judge_errors
+    scored = len(sampled_pages) - judge_errors
     value = (pure / scored) if scored else 0.0
     return {
         "value": round(value, 4),
         "total": total,
+        "sample_target": sample_size,
+        "sampled": len(sampled_pages),
         "scored": scored,
         "pure": pure,
         "impure": impure,
@@ -222,6 +257,12 @@ def main():
     ap.add_argument("--user-id", help="指定用户 UUID（默认自动选 pages 最多的用户）")
     ap.add_argument("--skip-llm", action="store_true", help="只跑纯脚本指标，不调 LLM")
     ap.add_argument("--out", default="wiki_eval_report.json", help="报告输出路径")
+    ap.add_argument("--links", type=int, default=DEFAULT_LINK_SAMPLE,
+                    help=f"链接正确率抽检链接数（0=全量，默认 {DEFAULT_LINK_SAMPLE}）")
+    ap.add_argument("--chunks", type=int, default=DEFAULT_CHUNK_SAMPLE,
+                    help=f"内容覆盖率抽检 chunk 数（0=全量，默认 {DEFAULT_CHUNK_SAMPLE}）")
+    ap.add_argument("--pages", type=int, default=DEFAULT_PAGE_SAMPLE,
+                    help=f"聚类纯度抽检页面数（0=全量，默认 {DEFAULT_PAGE_SAMPLE}）")
     args = ap.parse_args()
 
     user = _pick_user(args.user_id)
@@ -238,12 +279,13 @@ def main():
         "user_id": user_id,
         "page_count": len(pages),
         "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "sample_plan": {"links": args.links, "chunks": args.chunks, "pages": args.pages},
         "metrics": {},
     }
 
     # 纯脚本指标
-    report["metrics"]["link_validity"] = eval_link_validity(pages)
-    report["metrics"]["chunk_coverage"] = eval_chunk_coverage(user_id, pages)
+    report["metrics"]["link_validity"] = eval_link_validity(pages, args.links)
+    report["metrics"]["chunk_coverage"] = eval_chunk_coverage(user_id, pages, args.chunks)
 
     # LLM 判分指标
     if not args.skip_llm:
@@ -252,7 +294,8 @@ def main():
         print(f"载入 chunk 原文：{len(chunk_map)} 条，开始 LLM 判分（#1 溯源保真 / #4 聚类纯度）…")
         t0 = time.time()
         report["metrics"]["wiki_faithfulness"] = eval_faithfulness(pages, chunk_map, llm_client)
-        report["metrics"]["cluster_purity"] = eval_cluster_purity(pages, chunk_map, llm_client)
+        report["metrics"]["cluster_purity"] = eval_cluster_purity(
+            pages, chunk_map, llm_client, args.pages)
         report["llm_judge_seconds"] = round(time.time() - t0, 1)
     else:
         print("--skip-llm：跳过 #1 #4")
@@ -266,10 +309,12 @@ def main():
     print("LLM Wiki 评测结果")
     print("=" * 60)
     m = report["metrics"]
-    print(f"#2 链接正确率 link_validity      : {m['link_validity']['value']:.4f}  "
-          f"({m['link_validity']['valid']}/{m['link_validity']['total']})")
-    print(f"#3 内容覆盖率 chunk_coverage     : {m['chunk_coverage']['value']:.4f}  "
-          f"({m['chunk_coverage']['covered']}/{m['chunk_coverage']['total']})")
+    lv = m["link_validity"]
+    print(f"#2 链接正确率 link_validity      : {lv['value']:.4f}  "
+          f"({lv['valid']}/{lv['sampled']}，总链接 {lv['total']})")
+    cc = m["chunk_coverage"]
+    print(f"#3 内容覆盖率 chunk_coverage     : {cc['value']:.4f}  "
+          f"({cc['covered']}/{cc['sampled']}，eligible 总数 {cc['total']})")
     if "wiki_faithfulness" in m:
         f = m["wiki_faithfulness"]
         print(f"#1 溯源保真率 wiki_faithfulness  : {f['value']:.4f}  "
@@ -277,7 +322,8 @@ def main():
     if "cluster_purity" in m:
         c = m["cluster_purity"]
         print(f"#4 聚类纯度   cluster_purity     : {c['value']:.4f}  "
-              f"({c['pure']}/{c['scored']}，判分错误 {c['judge_errors']})")
+              f"({c['pure']}/{c['scored']}，抽检 {c['sampled']}/{c['total']} 页，"
+              f"判分错误 {c['judge_errors']})")
     print("=" * 60)
     print(f"报告已写入：{out_path.resolve()}")
 

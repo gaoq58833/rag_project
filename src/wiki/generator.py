@@ -152,7 +152,7 @@ def _name_clusters(previews: List[Dict]) -> Dict[int, Dict]:
             prompts.naming_messages(previews),
             schema_hint=prompts.naming_schema_hint(),
             temperature=0.1,
-            max_tokens=1024,
+            max_tokens=4096,
         )
     except Exception as e:
         logger.warning(f"Wiki 命名 LLM 调用失败，退回通用标题: {e}")

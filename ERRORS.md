@@ -17,7 +17,7 @@
 | 7   | `merge_tables` 报 `KeyError: 'rows'`         | 已解决 |
 | 8   | 合并后的 markdown 丢失分隔行，不再是合法表格 | 已解决 |
 | 9   | docling OCR 阶段内存不足，表格丢失甚至崩溃   | 已解决 |
-| 10  | docling 漏掉「环节」表最后一行数据           | 待修复 |
+| 10  | docling 漏掉「环节」表最后一行数据           | 已解决 |
 
 ---
 
@@ -117,7 +117,15 @@ docling 能检测到图片（本 PDF 5 张），但 `PdfPipelineOptions.generate
 定位方式：`量化/eval_tables.py` 逐表逐格比对，`原始 3×8` 对 `解析 3×7`，并提示「少 1 行」。
 
 **如何解决的**
-待修复。可能原因：该行位于表格末尾、紧邻分页或页脚，被版面模型判为非表格区域；也可能是最后一行与上一行在版面上贴得过近被合并。
+根因：版面模型给出的表格 bbox 少了最后一行（该行被排除在 table cluster 之外），TableFormer 只能看到 bbox 内的内容，于是这行既没进表格，又被 docling 当成正文 TextItem 输出（`tests/a.md` 第 144-145 行就是它）。
+
+新增 `src/parsers/pdf_table_repair.py`，在 `PDFParser` 导出 markdown 之前做一次修复：
+1. 由 `TableCell.bbox` 推出每列 x 区间、最后一行的下边界和行距；
+2. 在最后一行正下方取一条约「一行高」的窄条（`1.2 × 行距`），按列分别调用 `pypdfium2.get_text_bounded` 取文本；
+3. 只有「每列都有内容、都是单行、拼起来与窄条里那些正文 TextItem 完全一致」时才 `TableData.add_row()` 追加该行，并删除重复的正文 TextItem；
+4. 校验不通过就放弃，绝不猜内容，避免把表后紧跟的段落误并进表格。
+
+`PDFParser(repair_table_tail=False)` 可关闭；失败只打警告，不影响解析。核心逻辑用真实 PDF 坐标做了离线回归（`tests/test_pdf_table_repair.py`，不依赖 docling），能还原出 `训练与评估 | 任务八、九 | 准确率、模型文件`；端到端指标（`量化/eval_tables.py`）需在本机有 docling 环境时重跑复核。
 
 ---
 

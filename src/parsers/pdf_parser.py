@@ -3,6 +3,7 @@ from typing import List
 import os
 from src.parsers.base import BaseParser, ParseResult
 from src.parsers.table_parser import TableProcessor
+from src.parsers.pdf_table_repair import repair_missing_tail_rows
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -11,9 +12,12 @@ from docling_core.types.doc import ImageRefMode
 class PDFParser(BaseParser):
   """基于Docling的PDF解析器"""
   def __init__(self, images_scale: float = 1.0, ocr_scale: float = 1.5,
-               do_ocr: bool = True, image_dir: str = "data/images"):
+               do_ocr: bool = True, image_dir: str = "data/images",
+               repair_table_tail: bool = True):
     self.table_processor = TableProcessor()
     self.image_dir = image_dir
+    # 补回 docling 漏在表格下方、被当成正文的表格尾行（见 ERRORS.md #10）
+    self.repair_table_tail = repair_table_tail
     pipeline_options = PdfPipelineOptions()
     # 默认不生成图片位图，需显式开启，否则图片只有占位符
     pipeline_options.generate_picture_images = True
@@ -33,6 +37,7 @@ class PDFParser(BaseParser):
   def parse(self, file_path: str) -> ParseResult:
     # 使用Docling转换为Document对象
     doc = self.converter.convert(file_path)
+    self._repair_table_tail(doc, file_path)
     # 提取内容（图片保存到本地，markdown 里只留引用路径）
     raw_text = self._export_markdown(doc, Path(file_path).stem)
     # 提取表格
@@ -50,6 +55,7 @@ class PDFParser(BaseParser):
   def parse_from_bytes(self, file_bytes: bytes, filename: str) -> ParseResult:
     # 使用Docling转换为Document对象
     doc = self.converter.convert_from_bytes(file_bytes)
+    self._repair_table_tail(doc, file_bytes)
     # 提取内容（图片保存到本地，markdown 里只留引用路径）
     raw_text = self._export_markdown(doc, Path(filename).stem)
     # 提取表格
@@ -64,6 +70,15 @@ class PDFParser(BaseParser):
       tables=tables,
       metadata={"parser":"docling","file_path":filename}
      )
+  def _repair_table_tail(self, conv_res, source) -> None:
+    """把 docling 漏成正文的表格尾行补回表格（失败不影响解析）"""
+    if not self.repair_table_tail:
+      return
+    try:
+      repair_missing_tail_rows(conv_res.document, source)
+    except Exception as e:
+      print(f"警告：表格尾行补齐失败（忽略）：{e}")
+
   def _export_markdown(self, doc, stem: str) -> str:
     """导出 markdown：图片存到本地目录，正文里只留 ![图片](路径) 引用，不内嵌 base64"""
     md = doc.document.export_to_markdown()  # 默认占位符模式，图片位置是 <!-- image -->
