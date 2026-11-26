@@ -5,6 +5,7 @@
 """
 import logging
 import threading
+import uuid
 from typing import Any, Dict, List, Optional
 
 from qdrant_client.models import FieldCondition, Filter, MatchValue
@@ -51,8 +52,12 @@ def get_latest_job(user_id: str) -> Optional[Dict[str, Any]]:
     return WikiJobRepository.get_latest(user_id)
 
 
+_WIKI_POINT_NS = uuid.uuid5(uuid.NAMESPACE_URL, "rag-project/wiki-pages")
+
+
 def _page_point_id(user_id: str, slug: str) -> str:
-    return f"{user_id}::{slug}"
+    """Qdrant 服务模式的 point id 只接受无符号整数或 UUID，这里用命名空间 UUID 保证稳定。"""
+    return str(uuid.uuid5(_WIKI_POINT_NS, f"{user_id}/{slug}"))
 
 
 def process_wiki_generation(job_id: str, user_id: str) -> None:
