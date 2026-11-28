@@ -21,6 +21,7 @@ from src.llm import llm_client
 from src.parsers.chunker import ChunkStrategy, TextChunker
 from src.parsers.factory import get_parser, index_type_for
 from src.parsers.image_parser import ImageParser
+from src.rag.table_expand import merge_table_chunks
 from src.vectorstore import image_vector_store, vector_store
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
@@ -141,6 +142,7 @@ def submit_ingest(file_bytes: bytes, filename: str, user_id: Optional[str] = Non
                     "length": c["length"],
                     "chunk_type": c.get("chunk_type", "text"),
                     "section": c.get("section", ""),
+                    "table_index": c.get("table_index"),
                     "images": c.get("images", []),
                     "tokens": tokenize(c["content"]),
                 })
@@ -246,6 +248,7 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
                 "length": chunk["length"],
                 "chunk_type": chunk.get("type", "text"),
                 "section": chunk.get("section", ""),
+                "table_index": chunk.get("table_index"),
                 "images": chunk.get("images", []),
                 "tokens": tokenize(chunk["content"]),
             })
@@ -304,6 +307,34 @@ def process_ingest(document_id: str, file_bytes: bytes, filename: str, user_id: 
 def _sec(dt: float) -> float:
     """耗时统一上报为秒，保留 3 位小数（即毫秒精度）"""
     return round(dt, 3)
+
+
+def _table_key(row: Dict[str, Any]) -> Optional[tuple]:
+    """表格归属键：(document_id, table_index)；非表格或旧数据（无 table_index）返回 None"""
+    table_index = row.get("table_index")
+    if table_index is None:
+        return None
+    return (str(row.get("document_id")), int(table_index))
+
+
+def _expand_tables(pg_map: Dict[str, Dict[str, Any]], merged_ids: List[str]) -> None:
+    """把命中的表格子块原地替换为整表内容。
+
+    大表被按行窗口切开后，命中任一子块都能看到完整的表。同一张表只查一次兄弟块；
+    整表超过上限时由 merge_table_chunks 截断并注明。
+    """
+    cache: Dict[tuple, str] = {}
+    for pid in merged_ids:
+        row = pg_map[pid]
+        key = _table_key(row)
+        if key is None:
+            continue
+        if key not in cache:
+            siblings = ChunkRepository.get_table_siblings(key[0], key[1])
+            # 单块表无需回填；多于一块才合并
+            cache[key] = merge_table_chunks([s["content"] for s in siblings]) if len(siblings) > 1 else ""
+        if cache[key]:
+            row["content"] = cache[key]
 
 
 def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: bool = True,
@@ -370,6 +401,24 @@ def retrieve(query: str, user_id: str, top_k: Optional[int] = None, use_rerank: 
         if timings is not None:
             timings["retrieve_total_s"] = _sec(t_pg - t_start)
         return []
+
+    # 4b. 表格回填：命中表格子块时还原整表（必须在重排之前，否则重排仍只看行块）
+    #     同一张表的多个子块回填后内容相同，只保留排名最靠前的一块
+    t_expand = time.perf_counter()
+    _expand_tables(pg_map, merged_ids)
+    deduped: List[str] = []
+    seen_tables = set()
+    for pid in merged_ids:
+        key = _table_key(pg_map[pid])
+        if key is not None:
+            if key in seen_tables:
+                continue
+            seen_tables.add(key)
+        deduped.append(pid)
+    merged_ids = deduped
+    t_dedup = time.perf_counter()
+    if timings is not None:
+        timings["table_expand_s"] = _sec(t_dedup - t_expand)
 
     # 5. 重排（用 content 文本重排，从融合候选中取 top_n）
     if use_rerank and len(merged_ids) > 1:

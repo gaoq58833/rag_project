@@ -77,6 +77,7 @@ class TextChunker:
         span = []             # 当前块覆盖到的章节路径，块跨章节时会有多条
         pending_images = []   # 已遇到但还没归属到块的图片路径
         pending_heading = ""  # 单行标题暂存：拼到下一个块开头，避免标题独占一个碎片块
+        table_seq = 0         # 表格序号（从 1 开始）：同一张表切开后的子块共享该值，供检索时回填整表
 
         def label():
           # 块内跨章节时，把所有章节路径都标出来
@@ -139,6 +140,7 @@ class TextChunker:
 
             # 表格：先收尾当前文本块，再把表格按行窗口输出
             if kind == "table":
+                table_seq += 1
                 lead = ""
                 if current_chunk.strip():
                     if len(current_chunk) >= IDEAL_MIN:
@@ -164,7 +166,8 @@ class TextChunker:
                         "index": chunk_index,
                         "length": len(content),
                         "type": "table",
-                        "section": section
+                        "section": section,
+                        "table_index": table_seq
                     })
                     chunk_index += 1
                 continue

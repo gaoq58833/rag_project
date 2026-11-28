@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     length          INTEGER NOT NULL,
     chunk_type      TEXT NOT NULL DEFAULT 'text',  -- text / table / code
     section         TEXT,
+    table_index     INTEGER,        -- 表在文档内的序号（从 1 开始），同一张表被切开的子块共享该值
     images          JSONB NOT NULL DEFAULT '[]'::jsonb,
     tsv             TSVECTOR,       -- jieba 分词后的全文索引（BM25 风格关键词检索）
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -63,10 +64,13 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 -- 迁移：为已有 chunks 表补 tsv 列（必须在 idx_chunks_tsv 索引之前）
 ALTER TABLE chunks ADD COLUMN IF NOT EXISTS tsv TSVECTOR;
+-- 迁移：表格子块归属（大表被切开后，检索命中子块时按此回填整表）
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_index INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks (document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_qdrant_point_id ON chunks (qdrant_point_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_chunk_type ON chunks (chunk_type);
+CREATE INDEX IF NOT EXISTS idx_chunks_document_table ON chunks (document_id, table_index);
 CREATE INDEX IF NOT EXISTS idx_chunks_section ON chunks (section);
 CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
 -- 对 images JSONB 建 GIN 索引，方便按图片路径查询

@@ -137,8 +137,8 @@ class ChunkRepository:
         if not chunks:
             return 0
         sql = """
-            INSERT INTO chunks (document_id, qdrant_point_id, chunk_index, content, length, chunk_type, section, images, tsv)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, to_tsvector('simple', %s))
+            INSERT INTO chunks (document_id, qdrant_point_id, chunk_index, content, length, chunk_type, section, table_index, images, tsv)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, to_tsvector('simple', %s))
         """
         params = [
             (
@@ -149,6 +149,7 @@ class ChunkRepository:
                 c["length"],
                 c.get("chunk_type", "text"),
                 c.get("section"),
+                c.get("table_index"),
                 json.dumps(c.get("images", []), ensure_ascii=False),
                 c.get("tokens", ""),
             )
@@ -173,6 +174,19 @@ class ChunkRepository:
         return db.query_all(
             "SELECT * FROM chunks WHERE document_id = %s ORDER BY chunk_index",
             (document_id,),
+        )
+
+    @staticmethod
+    def get_table_siblings(document_id: str, table_index: int) -> List[Dict[str, Any]]:
+        """取同一张表被切开的全部子块（按 chunk_index 排序），供检索命中的子块回填整表。"""
+        return db.query_all(
+            """
+            SELECT qdrant_point_id, chunk_index, content, chunk_type
+            FROM chunks
+            WHERE document_id = %s AND table_index = %s
+            ORDER BY chunk_index
+            """,
+            (document_id, table_index),
         )
 
     @staticmethod

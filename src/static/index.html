@@ -1450,6 +1450,7 @@ function timingHtml(t, clientSec) {
     if (t.vector_search_s != null) add('向量召回', fmtSec(t.vector_search_s));
     if (t.bm25_s != null) add('BM25', fmtSec(t.bm25_s));
     if (t.pg_fetch_s != null) add('PG 回查', fmtSec(t.pg_fetch_s));
+    if (t.table_expand_s != null) add('表格回填', fmtSec(t.table_expand_s));
     if (t.rerank_s != null) add('重排', fmtSec(t.rerank_s));
     if (t.retrieve_total_s != null) add('检索合计', fmtSec(t.retrieve_total_s));
     if (t.wiki_s != null) add('Wiki 召回', fmtSec(t.wiki_s));

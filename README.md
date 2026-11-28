@@ -383,6 +383,7 @@ chunks = chunker.split(markdown_text)
 
 - **章节路径**：标题栈实时推导，如 `三、双向 LSTM > 3.2 取最后隐状态`；跨章节用 `；` 并列
 - **表格原子单元**：整表放得下就一块；超限按行窗口切，每块重复表头 + `【表格 · 第x-y行/共N行】` 前缀
+- **大表整表回填**：表格子块带 `table_index`（文档内表序号，同表共享），检索命中任一子块时按 `(document_id, table_index)` 取回全部兄弟块合并成整表（表头只留一份、去掉行级重叠），在**重排之前**完成，保证重排和回答都看到完整表格；整表超过 6000 字截断并注明。旧数据无 `table_index`，需重新入库才具备该能力
 - **图片不单独成块**：引用行并入当前块，路径记入 `images` 字段
 
 **块数据结构：**
@@ -422,11 +423,13 @@ chunks = chunker.split(markdown_text)
 ```text
 query → embed → Qdrant.query_points(top_k=10, user_id 过滤) ─┐
        → jieba 分词 → PG tsvector BM25(top_k=15) ───────────┴─> RRF 融合(k=60)
-                                                              → 回查 PG → rerank(top_n=3) → 返回
+                                                              → 回查 PG → 表格整表回填
+                                                              → rerank(top_n=3) → 返回
 ```
 
 - 默认混合检索（向量 + BM25 + RRF 融合）；传 `use_bm25=False` 切换纯向量模式，用于评测 A/B 对比
 - BM25 覆盖向量对编号/专名/参数类精确查询的弱区，RRF 融合不依赖两路分数量纲（向量是余弦相似度、BM25 是 ts_rank），只看排名
+- **表格整表回填**：回查 PG 后、重排前，把命中的表格子块按 `(document_id, table_index)` 换成整表（同一张表只保留排名最前的一块参与重排）
 - JSON 文档不写 Qdrant，只能从 BM25 路召回；`use_bm25=False` 的纯向量模式下 JSON 不可见
 - 图片 chunk 同时写入 Qdrant 和 tsv，两路都能召回，适合“文字找图”
 
@@ -440,12 +443,12 @@ retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生�
 
 - **普通模式** (`/chat`)：一次性返回完整 `{answer, sources, conversation_id, timings}`
 - **流式模式** (`/chat/stream`)：SSE 逐 token 返回，事件类型 `start` / `token` / `done` / `error`；`start` 与 `done` 均带 `timings`
-- **链路耗时**：`timings` 记录各阶段耗时（单位秒，保留 3 位小数即毫秒精度）：`embed_query_s` / `vector_search_s` / `bm25_s` / `pg_fetch_s` / `rerank_s` / `retrieve_total_s` / `llm_ttft_s` 首字延迟 / `llm_s` 生成时长 / `total_s` 服务端总耗时；前端在回答下方渲染耗时条，并额外展示浏览器端到端耗时
+- **链路耗时**：`timings` 记录各阶段耗时（单位秒，保留 3 位小数即毫秒精度）：`embed_query_s` / `vector_search_s` / `bm25_s` / `pg_fetch_s` / `table_expand_s` / `rerank_s` / `retrieve_total_s` / `llm_ttft_s` 首字延迟 / `llm_s` 生成时长 / `total_s` 服务端总耗时；前端在回答下方渲染耗时条，并额外展示浏览器端到端耗时
 
 ```json
 {
   "embed_query_s": 0.042, "vector_search_s": 0.002, "bm25_s": 0.003, "pg_fetch_s": 0.001,
-  "rerank_s": 0.061, "retrieve_total_s": 0.110, "llm_ttft_s": 0.321,
+  "table_expand_s": 0.001, "rerank_s": 0.061, "retrieve_total_s": 0.110, "llm_ttft_s": 0.321,
   "llm_s": 1.420, "total_s": 1.791, "cached": false
 }
 ```
@@ -459,12 +462,12 @@ retrieve 结果 → 拼接上下文 → system prompt + user query → LLM 生�
 | 表              | 关键字段                                                                                                        | 说明                                           |
 | --------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `documents`     | id, user_id(FK), filename, file_ext, content_hash, total_pages, table_count, chunk_count, raw_text, uploaded_at | 每个上传文件一条，content_hash 用于去重        |
-| `chunks`        | id, document_id(FK), qdrant_point_id, chunk_index, content, length, chunk_type, section, images(JSONB)          | 每个分块一条，通过 qdrant_point_id 关联 Qdrant |
+| `chunks`        | id, document_id(FK), qdrant_point_id, chunk_index, content, length, chunk_type, section, table_index, images(JSONB) | 每个分块一条，通过 qdrant_point_id 关联 Qdrant；`table_index` 标识表格子块属于文档内第几张表 |
 | `users`         | id, username, password_hash, role, avatar_url, created_at                                                       | 用户表，bcrypt 存储密码，avatar_url 为头像路径 |
 | `conversations` | id, user_id(FK), title, created_at, updated_at                                                                  | 对话表，按用户隔离                             |
 | `messages`      | id, conversation_id(FK), role, content, sources(JSONB), created_at                                              | 消息表，user/assistant 消息 + 引用来源         |
 
-索引：`documents(filename)`、`chunks(document_id)`、`chunks(qdrant_point_id)`、`chunks(chunk_type)`、`chunks(section)`、`chunks(images)` GIN。
+索引：`documents(filename)`、`chunks(document_id)`、`chunks(qdrant_point_id)`、`chunks(chunk_type)`、`chunks(section)`、`chunks(images)` GIN、`chunks(document_id, table_index)`（整表回填用）。
 
 > 表结构定义在 `src/db/schema.sql`，服务启动时自动执行建表（幂等）。
 
@@ -790,6 +793,7 @@ docker run --gpus all -p 8000:8000 rag-project:gpu
 | `python tests/test_txt.py`      | TXT 解析 → 分块 → 写 `data/txt_test/`          |
 | `python tests/test_json.py`     | JSON 解析：记录级分块、字段拆词、索引类型      |
 | `python tests/test_excel.py`    | Excel/CSV 解析：多 sheet、行组分块、多编码     |
+| `python tests/test_table_expand.py` | 大表跨块回填：`table_index` 打标、表头/重叠行去重、超长截断 |
 | `python tests/test_image.py`    | 图片解析：VLM 描述（mock）、原图落盘、向量索引 |
 | `python tests/test_image_search.py` | 以图搜图：多模态 embedding（mock）、图片集合检索、用户隔离 |
 | `python tests/test_factory.py`  | 解析器工厂：路由、单例、自定义参数、错误处理   |
@@ -1019,6 +1023,7 @@ docker-compose.yml    一键编排（PG + Qdrant + API）
 5. **短块偏多**：表格前引导语必须先落盘，会形成 35–300 字短块，是"表格原子化"的固有代价。
 6. **纯 BM25 文档不参与 Wiki**：JSON / Excel / CSV 只建倒排索引、不写 Qdrant 向量，聚类阶段取不到向量会被跳过；即使 `wiki_eligible=true` 也不会进入对应页面（其内容仍可通过传统检索命中）。
 7. **Wiki 生成有 LLM 成本**：全量重建按簇逐页调用 LLM，页面数受 `WIKI_MAX_PAGES` 约束；重复点击会复用进行中任务，`WIKI_AUTO_REGEN` 默认关闭以避免频繁上传反复生成。
+8. **大表靠整表回填保证完整性**：超过 1000 字的表格会按行窗口切开，单个子块只覆盖部分行；检索命中任一子块后按 `(document_id, table_index)` 取回全部子块合并成整表（上限 6000 字，超出截断注明）。旧数据未打 `table_index`，需重新入库才会生效。
 
 ---
 

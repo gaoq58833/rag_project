@@ -75,6 +75,7 @@ class ExcelParser(BaseParser):
                     "length": len(content),
                     "type": "table",
                     "section": section,
+                    "table_index": len(tables),   # 当前 sheet 的序号（sheet 即一张表）
                 })
 
         if not chunks:
